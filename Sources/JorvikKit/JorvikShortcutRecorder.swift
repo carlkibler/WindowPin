@@ -103,6 +103,15 @@ struct JorvikShortcutRecorder: View {
     // It was never reachable anyway: recording starts when the user clicks the
     // field, so this app IS frontmost and the local monitor has the keystroke.
 
+    /// The modifier symbols as words, for VoiceOver.
+    static func spoken(_ shortcut: String) -> String {
+        let names: [(String, String)] = [
+            ("\u{2303}", "Control "), ("\u{2325}", "Option "),
+            ("\u{21E7}", "Shift "), ("\u{2318}", "Command "),
+        ]
+        return names.reduce(shortcut) { $0.replacingOccurrences(of: $1.0, with: $1.1) }
+    }
+
     var body: some View {
         HStack {
             Text(label)
@@ -119,14 +128,18 @@ struct JorvikShortcutRecorder: View {
             } else {
                 Text(shortcutText)
                     .foregroundStyle(.secondary)
+                    // Read out as "Control Command P", not as three symbols.
+                    .accessibilityLabel(Self.spoken(shortcutText))
                 if onClear != nil, isSet {
                     Button(L10n.string("shortcut.clear", defaultValue: "Clear")) {
                         onClear?()
                     }
+                    .accessibilityLabel("Clear shortcut: \(label)")
                 }
                 Button(L10n.string("shortcut.change", defaultValue: "Change\u{2026}")) {
                     startRecording()
                 }
+                .accessibilityLabel("Change shortcut: \(label)")
             }
         }
         .onDisappear {
