@@ -36,14 +36,20 @@ final class PinnedWindowTracker {
     private var layeringTimer: Timer?
     private var activationObserver: NSObjectProtocol?
     private var terminationObserver: NSObjectProtocol?
+    private var wakeObserver: NSObjectProtocol?
+    private var screensObserver: NSObjectProtocol?
 
     /// Called whenever the pinned set changes.
     var onChange: (() -> Void)?
+    /// Called when a pin was taken down because Screen Recording was refused
+    /// after the pin was made, so the user can be told why it went.
+    var onCaptureDenied: ((PinnedWindow) -> Void)?
 
     init() {
         startPolling()
         observeAppActivation()
         observeAppTermination()
+        observeWakeAndDisplays()
     }
 
     deinit {
@@ -83,8 +89,21 @@ final class PinnedWindowTracker {
             pid: window.ownerPID
         )
         overlay.onCropChange = { [weak self] in self?.cropsChanged() }
+        overlay.onCaptureDenied = { [weak self] in
+            wplog("pin: capture refused, unpinning wid=\(pw.windowID)")
+            self?.unpin(windowID: pw.windowID)
+            self?.onCaptureDenied?(pw)
+        }
         overlays[window.windowID] = overlay
         wplog("pin: overlay created for wid=\(window.windowID)")
+
+        // A pin normally starts out of sight, because its window is the one
+        // in use, and comes up when the user switches to another app. Pinned
+        // from the menu while its app is not the active one, there is no
+        // switch coming to bring it up, so it comes up now.
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier != window.ownerPID {
+            overlay.bringToFront()
+        }
 
         onChange?()
     }
@@ -176,9 +195,31 @@ final class PinnedWindowTracker {
                     } else {
                         overlay.bringToFront()
                     }
+                    // A pin that stayed up through this switch but has lost
+                    // its stream gets it back here.
+                    overlay.reviveStreamIfNeeded()
                 }
             }
         }
+    }
+
+    // MARK: - Sleep and display changes
+
+    /// Sleep and a change of displays can each end a pin's stream. The stream
+    /// restarts itself a few times and then gives up, which a long sleep
+    /// outlasts, leaving the pin on a frozen frame.
+    private func observeWakeAndDisplays() {
+        let revive: (Notification) -> Void = { [weak self] _ in
+            // A moment for the displays to settle; a stream started at once
+            // is as likely to be stopped again.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                self?.overlays.values.forEach { $0.reviveStreamIfNeeded() }
+            }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main, using: revive)
+        screensObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main, using: revive)
     }
 
     // MARK: - Cropped pins
@@ -239,8 +280,8 @@ final class PinnedWindowTracker {
 
     private func pruneClosedWindows() {
         guard !pinnedWindows.isEmpty else { return }
-        let onScreen = WindowDetector.allOnScreenWindowIDs()
-        let removed = pinnedWindows.filter { !onScreen.contains($0.windowID) }
+        let existing = WindowDetector.allWindowIDs()
+        let removed = pinnedWindows.filter { !existing.contains($0.windowID) }
         guard !removed.isEmpty else { return }
         for pw in removed {
             overlays[pw.windowID]?.hideOverlay()

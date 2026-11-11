@@ -33,22 +33,20 @@ enum WindowDetector {
         var axBounds: CGRect?
         var axWindowID: CGWindowID?
 
-        if axResult == .success, let axWindow = axWindowRef {
-            axWindowID = WindowLevelManager.windowID(of: axWindow as! AXUIElement)
+        if axResult == .success, let axWindow = WindowLevelManager.element(from: axWindowRef) {
+            axWindowID = WindowLevelManager.windowID(of: axWindow)
             // Get title
             var titleRef: AnyObject?
-            if AXUIElementCopyAttributeValue(axWindow as! AXUIElement, kAXTitleAttribute as CFString, &titleRef) == .success {
+            if AXUIElementCopyAttributeValue(axWindow, kAXTitleAttribute as CFString, &titleRef) == .success {
                 axTitle = titleRef as? String
             }
             // Get position + size for fallback matching
             var posRef: AnyObject?
             var sizeRef: AnyObject?
-            if AXUIElementCopyAttributeValue(axWindow as! AXUIElement, kAXPositionAttribute as CFString, &posRef) == .success,
-               AXUIElementCopyAttributeValue(axWindow as! AXUIElement, kAXSizeAttribute as CFString, &sizeRef) == .success {
-                var pos = CGPoint.zero
-                var size = CGSize.zero
-                AXValueGetValue(posRef as! AXValue, .cgPoint, &pos)
-                AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+            if AXUIElementCopyAttributeValue(axWindow, kAXPositionAttribute as CFString, &posRef) == .success,
+               AXUIElementCopyAttributeValue(axWindow, kAXSizeAttribute as CFString, &sizeRef) == .success,
+               let pos = WindowLevelManager.point(from: posRef),
+               let size = WindowLevelManager.size(from: sizeRef) {
                 axBounds = CGRect(origin: pos, size: size)
             }
         }
@@ -135,8 +133,10 @@ enum WindowDetector {
         return nil
     }
 
-    /// Returns the set of all on-screen window IDs (layer 0).
-    static func allOnScreenWindowIDs() -> Set<UInt32> {
+    /// The IDs of every window that still exists, on screen or not: minimised,
+    /// on another Space, or ordered out by its app all count. A pin goes when
+    /// its window is destroyed, not when it is merely out of sight.
+    static func allWindowIDs() -> Set<UInt32> {
         guard let windowList = CGWindowListCopyWindowInfo([.excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
             return []
         }

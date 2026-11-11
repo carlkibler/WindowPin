@@ -94,10 +94,26 @@ class WindowOverlay: NSPanel {
     private var didLogFirstFrame = false
     /// Total frames delivered by the stream (diagnostics).
     private(set) var framesReceived = 0
-    /// Restarts tried since the stream last delivered a frame. Capped, so a
-    /// stream that cannot start does not retry for as long as the pin is up.
+    /// Restarts and window lookups tried since the pin last came to the front
+    /// or was revived. Capped, so a stream that cannot start, or one that
+    /// starts and promptly dies each time, does not retry once a second for
+    /// as long as the pin is up. `reviveStreamIfNeeded` gives it a fresh set.
     private var streamRestarts = 0
     private static let maxStreamRestarts = 5
+    /// A lookup of the window in ScreenCaptureKit's list is under way. One at
+    /// a time: several callers ask for the stream to start, and each used to
+    /// start a lookup of its own.
+    private var isResolving = false
+    /// The screenshot taken before the pin is first shown is under way.
+    private var isPreparingFirstShow = false
+    /// ScreenCaptureKit refused for want of Screen Recording. Nothing here can
+    /// fix that, and asking again puts the system's prompt back up.
+    private var captureDenied = false
+
+    /// Called once if capture is refused for want of Screen Recording, so the
+    /// tracker can take the pin down. A pin that cannot be filmed is a blank
+    /// or frozen panel sitting over the window it claims to show.
+    var onCaptureDenied: (() -> Void)?
 
     /// Whether the overlay is currently in "pinned visible" mode.
     private(set) var isPinVisible = false
@@ -204,34 +220,62 @@ class WindowOverlay: NSPanel {
     // MARK: - ScreenCaptureKit window resolution
 
     private func resolveSCWindow(thenStartStream: Bool = false) {
+        // A lookup already running will do; it is told to go on to start the
+        // stream if this caller needs that.
+        resolveStartsStream = resolveStartsStream || thenStartStream
+        guard !isResolving else { return }
+        isResolving = true
         Task { @MainActor in
+            let result: Result<SCShareableContent, Error>
             do {
-                let content = try await SCShareableContent.excludingDesktopWindows(
+                result = .success(try await SCShareableContent.excludingDesktopWindows(
                     false, onScreenWindowsOnly: false
-                )
+                ))
+            } catch {
+                result = .failure(error)
+            }
+            let startStream = self.resolveStartsStream
+            self.isResolving = false
+            self.resolveStartsStream = false
+
+            switch result {
+            case .success(let content):
                 if let match = content.windows.first(where: { $0.windowID == targetWindowID }) {
                     self.scWindow = match
                     wplog("overlay: resolved SCWindow for wid=\(targetWindowID) title='\(match.title ?? "")'")
-                    if thenStartStream && self.isPinVisible {
+                    if startStream && self.isPinVisible {
                         self.startStream()
                     }
                 } else {
                     wplog("overlay: SCWindow NOT FOUND for wid=\(targetWindowID) (checked \(content.windows.count) windows)")
-                    scheduleResolveRetry(thenStartStream: thenStartStream)
+                    scheduleResolveRetry(thenStartStream: startStream)
                 }
-            } catch {
+            case .failure(let error):
                 wplog("overlay: SCShareableContent error: \(error)")
                 // Without Screen Recording permission every retry fails the same
                 // way, and on macOS 27 each one puts the permission prompt back
-                // up a second after it was dismissed. Wait for the next pin.
-                if (error as NSError).code == SCStreamError.Code.userDeclined.rawValue { return }
-                scheduleResolveRetry(thenStartStream: thenStartStream)
+                // up a second after it was dismissed.
+                if (error as NSError).code == SCStreamError.Code.userDeclined.rawValue {
+                    if !captureDenied {
+                        captureDenied = true
+                        onCaptureDenied?()
+                    }
+                    return
+                }
+                scheduleResolveRetry(thenStartStream: startStream)
             }
         }
     }
 
+    /// Whether the lookup under way goes on to start the stream.
+    private var resolveStartsStream = false
+
+    /// Retries count against the same limit as stream restarts: a window that
+    /// ScreenCaptureKit never lists would otherwise be looked up, in a full
+    /// listing of every window, once a second for as long as the pin was up.
     private func scheduleResolveRetry(thenStartStream: Bool) {
-        guard thenStartStream else { return }
+        guard thenStartStream, streamRestarts < Self.maxStreamRestarts else { return }
+        streamRestarts += 1
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self = self, self.isPinVisible, self.stream == nil else { return }
             self.resolveSCWindow(thenStartStream: true)
@@ -384,7 +428,14 @@ class WindowOverlay: NSPanel {
         sendBehind()
         // Explicitly activating: this is the deliberate "take me to the real
         // window" action, the one place where moving focus is the point.
-        WindowLevelManager.raiseWindow(pid: targetPID, windowID: UInt32(targetWindowID), activate: true)
+        if !WindowLevelManager.raiseWindow(pid: targetPID, windowID: UInt32(targetWindowID), activate: true) {
+            // The window could not be raised (its app did not answer, or would
+            // not say which window is which). The pin has already gone behind,
+            // and without an app switch nothing would bring it back, so the
+            // click would simply make it vanish. Bring the app forward instead:
+            // the nearest thing to what was asked for.
+            NSRunningApplication(processIdentifier: targetPID)?.activate()
+        }
     }
 
     // MARK: - Cropping
@@ -696,6 +747,7 @@ class WindowOverlay: NSPanel {
         // Already on screen but behind — just raise level. The last streamed
         // frame is still on the layer, so there's content until fresh frames land.
         level = .floating
+        setShown(true)
         orderFront(nil)
         startStream()
         startFrameSync()
@@ -709,8 +761,41 @@ class WindowOverlay: NSPanel {
         cancelGesture()
         stopStream()
         stopFrameSync()
+        // Not yet shown for the first time: there is nothing to put behind,
+        // and ordering it back would put an empty panel on screen.
+        guard isVisible else { return }
         level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.normalWindow)) - 1)
+        setShown(false)
         orderBack(nil)
+    }
+
+    /// Behind is below every normal window, which hides the pin only for as
+    /// long as its own window sits exactly on top of it. It stops following
+    /// the window while it is behind, so moving, resizing, minimising or
+    /// closing the window left a frozen copy of it on the desktop, and a
+    /// click on that copy brought the real window forward. So a pin that is
+    /// behind is also transparent and takes no clicks. It stays on screen,
+    /// as before, which is what avoids a flicker when it comes back.
+    private func setShown(_ shown: Bool) {
+        // Through the animator with no duration, so a fade-in still running
+        // is replaced rather than left to finish at full opacity.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            self.animator().alphaValue = shown ? 1 : 0
+        }
+        ignoresMouseEvents = !shown
+    }
+
+    /// Start the stream again on a pin that is showing but has none: it gave
+    /// up restarting, or lost its stream while the Mac slept or the displays
+    /// changed. Without this such a pin kept its last frame until it next went
+    /// behind and came back. Called whenever the active app changes, on wake
+    /// and when the displays change.
+    func reviveStreamIfNeeded() {
+        guard isPinVisible, isVisible, stream == nil, !captureDenied else { return }
+        wplog("overlay: reviving stream wid=\(targetWindowID)")
+        streamRestarts = 0
+        startStream()
     }
 
     /// Fully remove overlay from screen (used when unpinning / cleaning up).
@@ -732,36 +817,35 @@ class WindowOverlay: NSPanel {
             fadeIn()
             return
         }
+        // Going behind and coming back while the screenshot is being taken
+        // must not take a second one and fade in twice.
+        guard !isPreparingFirstShow else { return }
+        isPreparingFirstShow = true
 
         // Grab one screenshot BEFORE showing so the first visible frame has
         // content — the stream takes a beat to deliver its first frame.
-        Task {
+        Task { @MainActor in
+            let filter = SCContentFilter(desktopIndependentWindow: scWindow)
+            let config = self.makeStreamConfig(pixelScale: CGFloat(filter.pointPixelScale))
             do {
-                let filter = SCContentFilter(desktopIndependentWindow: scWindow)
-                let config = self.makeStreamConfig(pixelScale: CGFloat(filter.pointPixelScale))
-                let image = try await SCScreenshotManager.captureImage(
+                self.contentLayer.contents = try await SCScreenshotManager.captureImage(
                     contentFilter: filter, configuration: config
                 )
-                await MainActor.run {
-                    self.contentLayer.contents = image
-                    // The pin may have been sent behind or unpinned while the
-                    // screenshot was being taken; it must stay that way.
-                    guard self.isPinVisible else { return }
-                    self.fadeIn()
-                }
             } catch {
                 wplog("overlay: pre-show capture failed wid=\(targetWindowID): \(error)")
-                await MainActor.run {
-                    guard self.isPinVisible else { return }
-                    self.fadeIn()
-                }
             }
+            self.isPreparingFirstShow = false
+            // The pin may have been sent behind or unpinned while the
+            // screenshot was being taken; it must stay that way.
+            guard self.isPinVisible, !self.isVisible else { return }
+            self.fadeIn()
         }
     }
 
     private func fadeIn() {
         level = .floating
         alphaValue = 0
+        ignoresMouseEvents = false
         orderFront(nil)
         NSAnimationContext.runAnimationGroup { context in
             context.duration = 0.15
@@ -840,9 +924,16 @@ class WindowOverlay: NSPanel {
     /// Apply the current capture-rate setting / frame size to a running stream.
     func applyCaptureRate() {
         guard let stream = stream else { return }
-        stream.updateConfiguration(makeStreamConfig(pixelScale: streamPixelScale)) { error in
-            if let error = error {
-                wplog("overlay: updateConfiguration (rate) error: \(error)")
+        stream.updateConfiguration(makeStreamConfig(pixelScale: streamPixelScale)) { [weak self] error in
+            guard let error = error else { return }
+            wplog("overlay: updateConfiguration (rate) error: \(error)")
+            // Forget what the stream was last set up for, so the next frame
+            // sync sees a difference and tries again. Left as it was, the
+            // stream kept its old size for good, and a cropped pin, which
+            // waits for a frame of the new size, never updated again.
+            DispatchQueue.main.async {
+                guard let self, self.stream === stream else { return }
+                self.lastStreamGeometry = .zero
             }
         }
     }
@@ -1021,6 +1112,7 @@ class WindowOverlay: NSPanel {
     deinit {
         if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
         frameSyncTimer?.invalidate()
+        reconfigureTimer?.invalidate()
         if let stream = stream {
             stream.stopCapture { _ in }
         }
@@ -1043,11 +1135,12 @@ extension WindowOverlay: SCStreamOutput, SCStreamDelegate {
 
         let surfaceRef = surface.takeUnretainedValue()
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
+            // Frames from a stream already replaced or stopped can still be on
+            // their way here. They are of the old size or the old crop.
+            guard let self = self, self.stream === stream else { return }
             self.framesReceived += 1
             if !self.didLogFirstFrame {
                 self.didLogFirstFrame = true
-                self.streamRestarts = 0
                 wplog("overlay: first frame \(CVPixelBufferGetWidth(pixelBuffer))x\(CVPixelBufferGetHeight(pixelBuffer))px for \(Int(self.frame.width))x\(Int(self.frame.height))pt @\(self.streamPixelScale)x wid=\(self.targetWindowID)")
                 // Stage B measurement, behind its own flag. See AXScroller.
                 AXScroller.probe(pid: self.targetPID, windowID: self.targetWindowID)
@@ -1078,8 +1171,10 @@ extension WindowOverlay: SCStreamOutput, SCStreamDelegate {
     func stream(_ stream: SCStream, didStopWithError error: Error) {
         wplog("overlay: stream stopped wid=\(targetWindowID): \(error)")
         DispatchQueue.main.async { [weak self] in
-            guard let self = self else { return }
-            if self.stream === stream { self.stream = nil }
+            // A stream stopped on purpose can report an error on its way out;
+            // that is not a reason to restart the one that replaced it.
+            guard let self = self, self.stream === stream else { return }
+            self.stream = nil
             // Window may have closed (tracker will prune it), or capture broke
             // (display reconfigure) — retry while we're still pinned-visible.
             self.restartStreamAfterFailure()

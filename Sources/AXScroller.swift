@@ -219,6 +219,10 @@ enum AXScroller {
             resolved.append(Area(frame: frame, bar: bar))
         }
         guard !resolved.isEmpty else {
+            // Remembered like any other answer. The walk that found nothing
+            // cost as much as one that finds something, and without this it
+            // was repeated for every scroll event over such a window.
+            cache[windowID] = Resolved(areas: [], at: Date())
             wplog("axscroll: no settable scroll bar in wid=\(windowID); scrolling unavailable here")
             return nil
         }
@@ -243,10 +247,8 @@ enum AXScroller {
         guard AXUIElementCopyAttributeValue(e, kAXPositionAttribute as CFString, &posRef) == .success,
               AXUIElementCopyAttributeValue(e, kAXSizeAttribute as CFString, &sizeRef) == .success
         else { return nil }
-        var origin = CGPoint.zero
-        var size = CGSize.zero
-        AXValueGetValue(posRef as! AXValue, .cgPoint, &origin)
-        AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+        guard let origin = WindowLevelManager.point(from: posRef),
+              let size = WindowLevelManager.size(from: sizeRef) else { return nil }
         return CGRect(origin: origin, size: size)
     }
 
@@ -276,8 +278,7 @@ enum AXScroller {
     private static func copyElement(_ e: AXUIElement, _ attr: String) -> AXUIElement? {
         var ref: AnyObject?
         guard AXUIElementCopyAttributeValue(e, attr as CFString, &ref) == .success else { return nil }
-        guard let v = ref, CFGetTypeID(v) == AXUIElementGetTypeID() else { return nil }
-        return (v as! AXUIElement)
+        return WindowLevelManager.element(from: ref)
     }
 
     private static func copyString(_ e: AXUIElement, _ attr: String) -> String? {

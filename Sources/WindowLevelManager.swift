@@ -7,6 +7,7 @@ import Foundation
 // Diagnostic logging — off by default, enabled per-machine via:
 //   defaults write cc.jorviksoftware.WindowPin debugLogging -bool YES
 //   defaults delete cc.jorviksoftware.WindowPin debugLogging   # turn off
+// (A local build made with its own LOCAL_BUNDLE_ID uses that identifier here.)
 // When on, timestamped lines are appended to
 //   ~/Library/Logs/WindowPin/windowpin.log
 //
@@ -60,7 +61,9 @@ enum WindowLevelManager {
     ///   NO default. Raising and activating were welded together here, and every
     ///   caller therefore activated whether it meant to or not; requiring the
     ///   argument stops a future call site doing that by omission.
-    static func raiseWindow(pid: pid_t, windowID: UInt32, activate: Bool) {
+    /// - Returns: whether the window was found and asked to come forward.
+    @discardableResult
+    static func raiseWindow(pid: pid_t, windowID: UInt32, activate: Bool) -> Bool {
         let app = AXUIElementCreateApplication(pid)
 
         // Check if we're trusted for accessibility
@@ -71,7 +74,7 @@ enum WindowLevelManager {
         let axErr = AXUIElementCopyAttributeValue(app, kAXWindowsAttribute as CFString, &windowsRef)
         guard axErr == .success, let windows = windowsRef as? [AXUIElement] else {
             wplog("raiseWindow: could not get windows for pid=\(pid) axErr=\(axErr.rawValue) trusted=\(trusted)")
-            return
+            return false
         }
 
         // Find the specific window by matching against CGWindowList
@@ -90,7 +93,7 @@ enum WindowLevelManager {
                     runningApp.activate()
                     wplog("raiseWindow: activated app '\(runningApp.localizedName ?? "?")'")
                 }
-                return
+                return raiseResult == .success
             }
         }
 
@@ -100,6 +103,7 @@ enum WindowLevelManager {
         // forward. Doing nothing and saying so is better than acting on the
         // wrong window.
         wplog("raiseWindow: no AX window matched wid=\(windowID) pid=\(pid); doing nothing")
+        return false
     }
 
     /// Match an AXUIElement window to a CGWindowID by comparing position and size.
@@ -139,10 +143,7 @@ enum WindowLevelManager {
             return false
         }
 
-        var axPos = CGPoint.zero
-        var axSize = CGSize.zero
-        AXValueGetValue(posRef as! AXValue, .cgPoint, &axPos)
-        AXValueGetValue(sizeRef as! AXValue, .cgSize, &axSize)
+        guard let axPos = point(from: posRef), let axSize = size(from: sizeRef) else { return false }
 
         // Find matching CGWindow entry
         guard let windowList = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
@@ -171,9 +172,31 @@ enum WindowLevelManager {
 
 
 
-    /// Unpin is just tracking — no level to reset.
-    static func unpin(windowID: UInt32) -> Bool {
-        wplog("unpin(wid=\(windowID))")
-        return true
+    // MARK: - Reading Accessibility values
+    //
+    // What comes back from another app is whatever that app chose to send. A
+    // forced cast of it to the expected type crashes WindowPin when an app
+    // answers with something else, so the type is checked first.
+
+    static func element(from ref: AnyObject?) -> AXUIElement? {
+        guard let ref, CFGetTypeID(ref) == AXUIElementGetTypeID() else { return nil }
+        return (ref as! AXUIElement)
+    }
+
+    static func point(from ref: AnyObject?) -> CGPoint? {
+        var point = CGPoint.zero
+        guard let value = axValue(from: ref), AXValueGetValue(value, .cgPoint, &point) else { return nil }
+        return point
+    }
+
+    static func size(from ref: AnyObject?) -> CGSize? {
+        var size = CGSize.zero
+        guard let value = axValue(from: ref), AXValueGetValue(value, .cgSize, &size) else { return nil }
+        return size
+    }
+
+    private static func axValue(from ref: AnyObject?) -> AXValue? {
+        guard let ref, CFGetTypeID(ref) == AXValueGetTypeID() else { return nil }
+        return (ref as! AXValue)
     }
 }
