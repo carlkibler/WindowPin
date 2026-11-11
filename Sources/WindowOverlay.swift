@@ -821,6 +821,8 @@ class WindowOverlay: NSPanel {
     }
 
     private func stopStream() {
+        reconfigureTimer?.invalidate()
+        reconfigureTimer = nil
         guard let stream = stream else { return }
         self.stream = nil
         stream.stopCapture { error in
@@ -838,6 +840,37 @@ class WindowOverlay: NSPanel {
                 wplog("overlay: updateConfiguration (rate) error: \(error)")
             }
         }
+    }
+
+    /// Resizing a cropped pin changes its geometry on every step of the drag,
+    /// and reconfiguring the stream on each one asked ScreenCaptureKit for
+    /// more updates than it can apply. The stream is reconfigured at most this
+    /// often, and always once more after the last change so it ends up right.
+    /// A frame of the old size meanwhile is stretched to the panel, not
+    /// dropped, so the pin keeps showing something throughout.
+    private static let reconfigureInterval: CFTimeInterval = 0.1
+    private var lastReconfigure: CFTimeInterval = 0
+    private var reconfigureTimer: Timer?
+
+    private func reconfigureStream() {
+        let wait = lastReconfigure + Self.reconfigureInterval - CACurrentMediaTime()
+        guard wait > 0 else {
+            reconfigureTimer?.invalidate()
+            reconfigureTimer = nil
+            lastReconfigure = CACurrentMediaTime()
+            applyCaptureRate()
+            return
+        }
+        guard reconfigureTimer == nil else { return }
+        // Common modes, so it fires during the live resize itself.
+        let timer = Timer(timeInterval: wait, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.reconfigureTimer = nil
+            self.lastReconfigure = CACurrentMediaTime()
+            self.applyCaptureRate()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        reconfigureTimer = timer
     }
 
     func updateCollectionBehavior() {
@@ -909,7 +942,7 @@ class WindowOverlay: NSPanel {
         let geometry = streamGeometry(windowSize: target.size, panelSize: wanted.size)
         if stream != nil, !geometry.equalTo(lastStreamGeometry) {
             lastStreamGeometry = geometry
-            applyCaptureRate()
+            reconfigureStream()
         }
     }
 
