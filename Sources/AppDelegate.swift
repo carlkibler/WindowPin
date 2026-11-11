@@ -91,6 +91,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         NSApp.setActivationPolicy(.accessory)
 
+        // Every Accessibility call WindowPin makes waits on another app, and the
+        // default timeout is about six seconds. Several run on the main thread,
+        // where the hotkey's event tap also lives, so one hung app could stall
+        // WindowPin and every keystroke in the system. Setting the timeout on the
+        // system-wide element sets it for all elements that don't set their own.
+        // A second is long enough for a slow app's first answer, short enough
+        // that a hung one is no worse than a hiccup.
+        AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.0)
+
         let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
         let trusted = AXIsProcessTrustedWithOptions(options)
         wplog("Accessibility trusted: \(trusted)")
