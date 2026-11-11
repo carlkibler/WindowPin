@@ -49,8 +49,21 @@ enum EventForwarder {
     /// Map the event's location on the overlay to the equivalent point inside
     /// the target window, in global CG (top-left origin) coordinates. The
     /// overlay owns the mapping because only it knows whether it is cropped.
+    ///
+    /// Drags and releases keep arriving after the pointer leaves the overlay,
+    /// and must still be delivered: a release dropped there would leave the
+    /// target app mid-drag with its button held. They go to the nearest point
+    /// on the overlay's edge instead.
     private static func mapToTarget(event: NSEvent, overlay: WindowOverlay) -> CGPoint? {
-        overlay.targetPoint(forLocation: event.locationInWindow)
+        let clamped: Bool
+        switch event.type {
+        case .leftMouseDragged, .leftMouseUp, .rightMouseDragged, .rightMouseUp,
+             .otherMouseDragged, .otherMouseUp:
+            clamped = true
+        default:
+            clamped = false
+        }
+        return overlay.targetPoint(forLocation: event.locationInWindow, clamped: clamped)
     }
 
     // MARK: - Mouse events
