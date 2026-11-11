@@ -268,12 +268,19 @@ class WindowOverlay: NSPanel {
     /// crop, scaled to the panel: take the fraction across the panel and apply
     /// it to the part of the window being shown. Fractions rather than offsets
     /// keep the point right while the two frames briefly disagree mid-resize.
-    func targetPoint(forLocation loc: NSPoint) -> CGPoint? {
+    ///
+    /// A point off the panel has no matching point and gives nil, unless
+    /// `clamped`, when it is moved to the nearest edge of the panel first.
+    func targetPoint(forLocation loc: NSPoint, clamped: Bool = false) -> CGPoint? {
         let size = frame.size
         guard size.width > 0, size.height > 0,
               let bounds = Self.windowBounds(targetWindowID) else { return nil }
-        let fx = loc.x / size.width
-        let fyFromTop = (size.height - loc.y) / size.height
+        var fx = loc.x / size.width
+        var fyFromTop = (size.height - loc.y) / size.height
+        if clamped {
+            fx = min(max(fx, 0), 1)
+            fyFromTop = min(max(fyFromTop, 0), 1)
+        }
         guard fx >= 0, fx <= 1, fyFromTop >= 0, fyFromTop <= 1 else { return nil }
         let shown = shownRect(windowSize: bounds.size)
         return CGPoint(x: bounds.origin.x + shown.minX + fx * shown.width,
