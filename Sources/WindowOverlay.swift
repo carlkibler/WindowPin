@@ -750,6 +750,7 @@ class WindowOverlay: NSPanel {
         // resampling at composite time, which is what keeps text sharp.
         let filterScale = CGFloat(filter.pointPixelScale)
         streamPixelScale = filterScale >= 1 ? filterScale : displayScale
+        targetScreenScale = Self.getWindowFrame(windowID: targetWindowID).flatMap(Self.screenScale(under:))
         let config = makeStreamConfig(pixelScale: streamPixelScale)
         lastStreamGeometry = currentStreamGeometry()
         didLogFirstFrame = false
@@ -807,6 +808,20 @@ class WindowOverlay: NSPanel {
         return NSScreen.main?.backingScaleFactor ?? 2
     }
 
+    /// The scale of the display the target window was on when the stream's
+    /// scale was last decided, so moving it to another display can be seen.
+    private var targetScreenScale: CGFloat?
+
+    /// Backing scale of the display holding most of `rect`, in screen points.
+    private static func screenScale(under rect: NSRect) -> CGFloat? {
+        let best = NSScreen.screens.max { a, b in
+            let ia = a.frame.intersection(rect), ib = b.frame.intersection(rect)
+            return ia.width * ia.height < ib.width * ib.height
+        }
+        guard let best, best.frame.intersects(rect) else { return nil }
+        return best.backingScaleFactor
+    }
+
     private func makeStreamConfig(pixelScale: CGFloat) -> SCStreamConfiguration {
         let config = SCStreamConfiguration()
         // Size the output to the window's native pixels and pin the resolution
@@ -858,7 +873,19 @@ class WindowOverlay: NSPanel {
         // Window resized or crop changed → the stream's output size and the
         // area it films need to follow.
         let geometry = streamGeometry(windowSize: target.size, panelSize: wanted.size)
-        if stream != nil, !geometry.equalTo(lastStreamGeometry) {
+        // So does its pixel size when the window moves between a Retina and a
+        // standard display, or the frames come out twice the size or blurred
+        // until the pin is restarted. The filter's scale was fixed when the
+        // stream started, so the display's own scale is used instead.
+        var scaleChanged = false
+        if stream != nil, let scale = Self.screenScale(under: target),
+           let before = targetScreenScale, scale != before {
+            wplog("overlay: display scale \(before)x -> \(scale)x wid=\(targetWindowID)")
+            targetScreenScale = scale
+            streamPixelScale = scale
+            scaleChanged = true
+        }
+        if stream != nil, scaleChanged || !geometry.equalTo(lastStreamGeometry) {
             lastStreamGeometry = geometry
             applyCaptureRate()
         }
