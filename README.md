@@ -209,6 +209,13 @@ make install   # copies it to ~/Applications (set INSTALL_DIR to change)
 
 A local build has no updater: Sparkle is left out, so it never checks for or offers updates.
 
+A local build is ad hoc signed unless you say otherwise. To sign it with your own Developer ID, put your settings in a `local.mk` beside the Makefile. That file is ignored by git:
+
+```make
+LOCAL_SIGN_ID   := Developer ID Application: Your Name (TEAMID)
+LOCAL_BUNDLE_ID := com.example.WindowPin
+```
+
 The signed, notarised release build, which embeds Sparkle, is driven by the shared [`release.mk`](https://github.com/PerpetualBeta/jorvik-release) Make include. The Makefile looks for it at `../jorvik-release/`, or wherever `JORVIK_RELEASE` points. It needs GNU Make 4+ (`gmake`, from [Homebrew](https://brew.sh)), because macOS ships 3.81 as `make`.
 
 ```bash
