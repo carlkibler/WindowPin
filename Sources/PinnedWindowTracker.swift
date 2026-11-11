@@ -72,11 +72,10 @@ final class PinnedWindowTracker {
             windowTitle: window.windowTitle
         )
         guard !pinnedWindows.contains(pw) else { return }
+        guard Self.hasScreenRecording() else { return }
 
         pinnedWindows.insert(pw)
 
-        // Always create the overlay — if Screen Recording isn't granted,
-        // the capture will just return nil and the overlay stays blank.
         let overlay = WindowOverlay(
             windowID: CGWindowID(window.windowID),
             pid: window.ownerPID
@@ -86,6 +85,29 @@ final class PinnedWindowTracker {
         wplog("pin: overlay created for wid=\(window.windowID)")
 
         onChange?()
+    }
+
+    /// Whether Screen Recording is granted, asking for it if not.
+    ///
+    /// A pin without it is blank, and left to itself ScreenCaptureKit put the
+    /// permission prompt back up every time it failed. So ask before pinning
+    /// instead. The first request shows the system prompt and adds WindowPin to
+    /// the list in System Settings; macOS shows that prompt only once, so after
+    /// that go straight to the setting.
+    private static var requestedScreenRecording = false
+
+    private static func hasScreenRecording() -> Bool {
+        if CGPreflightScreenCaptureAccess() { return true }
+        wplog("pin: Screen Recording not granted")
+        if !requestedScreenRecording {
+            requestedScreenRecording = true
+            if CGRequestScreenCaptureAccess() { return true }
+            return false
+        }
+        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
+            NSWorkspace.shared.open(url)
+        }
+        return false
     }
 
     func unpin(windowID: UInt32) {
