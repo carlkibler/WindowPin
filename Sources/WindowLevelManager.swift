@@ -114,7 +114,23 @@ enum WindowLevelManager {
         return windows.first { matchesWindowID(axWindow: $0, pid: pid, targetWID: windowID) }
     }
 
+    /// The window number of an Accessibility window, or nil if the app will
+    /// not say.
+    static func windowID(of axWindow: AXUIElement) -> CGWindowID? {
+        var wid: CGWindowID = 0
+        guard _AXUIElementGetWindow(axWindow, &wid) == .success, wid != 0 else { return nil }
+        return wid
+    }
+
     private static func matchesWindowID(axWindow: AXUIElement, pid: pid_t, targetWID: UInt32) -> Bool {
+        // Ask the window its number first. The frame match below only sees
+        // windows on the current space and not minimised, so a pin whose
+        // window was elsewhere silently stopped scrolling and raising, and it
+        // cannot tell apart two of an app's windows with the same frame.
+        if let wid = windowID(of: axWindow) {
+            return wid == targetWID
+        }
+
         // Get AX position and size
         var posRef: AnyObject?
         var sizeRef: AnyObject?
