@@ -23,6 +23,16 @@ struct JorvikShortcutRecorder: View {
     var onClear: (() -> Void)?
     var eventTapToDisable: CFMachPort?
 
+    /// Like `eventTapToDisable`, but asked for when recording starts rather than when
+    /// the view is built. Preferred where the tap can come and go: a settings view is
+    /// often cached, so a tap that did not exist when it was first built (Accessibility
+    /// granted later, say) would never be disabled, and recording the current shortcut
+    /// would fire its action. Takes precedence when it returns a tap.
+    var eventTapProvider: (() -> CFMachPort?)?
+
+    /// The tap disabled for the current recording, so that very tap is re-enabled.
+    @State private var disabledTap: CFMachPort?
+
     /// Whether a shortcut is actually stored, asked of the bindings rather than
     /// inferred from `shortcutText`.
     ///
@@ -129,8 +139,9 @@ struct JorvikShortcutRecorder: View {
 
     private func startRecording() {
         // Disable event tap if provided (e.g. WindowPin's CGEvent tap)
-        if let tap = eventTapToDisable {
+        if let tap = eventTapProvider?() ?? eventTapToDisable {
             CGEvent.tapEnable(tap: tap, enable: false)
+            disabledTap = tap
         }
 
         isRecording = true
@@ -182,13 +193,18 @@ struct JorvikShortcutRecorder: View {
     }
 
     private func stopRecording() {
+        // The view's onDisappear calls this whether or not a recording is under way.
+        // Without the guard it re-enabled the tap and reported the end of a recording
+        // that never began.
+        guard isRecording else { return }
         if let m = localMonitor { NSEvent.removeMonitor(m); localMonitor = nil }
         isRecording = false
         needsModifier = false
 
         // Re-enable event tap
-        if let tap = eventTapToDisable {
+        if let tap = disabledTap {
             CGEvent.tapEnable(tap: tap, enable: true)
+            disabledTap = nil
         }
         onRecordingChanged?(false)
     }
