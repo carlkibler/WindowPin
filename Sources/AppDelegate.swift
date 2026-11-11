@@ -221,7 +221,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem.separator())
 
         // Pin/Unpin action
-        let targetWindow = WindowDetector.getFrontmostForeignWindow() ?? lastForeignWindow
+        // The remembered window is only a fallback, and it may have been closed
+        // since it was remembered; offering it would pin a window that is gone.
+        var remembered = lastForeignWindow
+        if let fw = remembered, !WindowDetector.allOnScreenWindowIDs().contains(fw.windowID) {
+            lastForeignWindow = nil
+            remembered = nil
+        }
+        let targetWindow = WindowDetector.getFrontmostForeignWindow() ?? remembered
 
         if let fw = targetWindow {
             let isPinned = tracker.isPinned(windowID: fw.windowID)
