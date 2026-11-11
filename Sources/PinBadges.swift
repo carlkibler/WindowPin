@@ -31,7 +31,10 @@ final class PinBadgeController {
     // so: the active app changes, the app reports a window focused, moved or
     // resized, a mouse button goes down (the start of every drag), the Space
     // changes, or a pin is made or removed. Each of those calls `refresh`,
-    // which follows closely for a second and then stops.
+    // which follows closely for a second and then stops. A click is the
+    // exception, being by far the most common and usually nothing to do with
+    // a window moving: it gets one check, and is followed only for as long as
+    // the button stays down.
     //
     // This used to be one timer, ten times a second, for as long as WindowPin
     // was running, which kept an app that is idle nearly all day awake.
@@ -72,7 +75,7 @@ final class PinBadgeController {
         // changes the pinned set, which refreshes by itself.
         mouseMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .leftMouseUp]
-        ) { [weak self] _ in self?.refresh() }
+        ) { [weak self] _ in self?.refresh(following: false) }
 
         refresh()
     }
@@ -96,13 +99,17 @@ final class PinBadgeController {
     /// Bring the badges up to date now, and follow closely for the next
     /// second: what was just reported is often the start of something still
     /// going on, such as a drag, an animated resize, or a pin fading in.
-    func refresh() {
+    ///
+    /// - Parameter following: false for a mouse button going down or up, which
+    ///   is followed only while the button is held. If the click did move a
+    ///   window, the app says so, and that report is followed as usual.
+    func refresh(following: Bool = true) {
         observeFrontmostApp()
         readFocusedWindow()
         update()
 
-        followUntil = Date().addingTimeInterval(1)
-        if followTimer == nil {
+        if following { followUntil = Date().addingTimeInterval(1) }
+        if followTimer == nil, following || NSEvent.pressedMouseButtons != 0 {
             followTicks = 0
             // Common modes, so it keeps up during a drag.
             let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.follow() }
