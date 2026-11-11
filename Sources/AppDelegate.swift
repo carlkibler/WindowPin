@@ -127,6 +127,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             queue: .main
         ) { [weak self] notification in
             guard let self = self else { return }
+            self.recoverEventTapIfNeeded()
             let myPID = ProcessInfo.processInfo.processIdentifier
             if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
                app.processIdentifier != myPID {
@@ -329,16 +330,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if !tryCreateEventTap() {
             wplog("registerHotkey: waiting for Accessibility permission…")
-            permissionTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
-                if AXIsProcessTrusted() {
-                    wplog("registerHotkey: permission granted, retrying tap…")
-                    if self?.tryCreateEventTap() == true {
-                        timer.invalidate()
-                        self?.permissionTimer = nil
-                    }
+            startPermissionPolling()
+        }
+    }
+
+    private func startPermissionPolling() {
+        permissionTimer?.invalidate()
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
+            if AXIsProcessTrusted() {
+                wplog("registerHotkey: permission granted, retrying tap…")
+                if self?.tryCreateEventTap() == true {
+                    timer.invalidate()
+                    self?.permissionTimer = nil
                 }
             }
         }
+    }
+
+    /// Revoking Accessibility (or removing and re-adding the app, as the README
+    /// suggests) leaves our tap invalid, and nothing else notices: the hotkey
+    /// stays dead until relaunch. Called whenever the frontmost app changes,
+    /// which covers coming back from System Settings. A dead tap is dropped so
+    /// the permission poll can build a fresh one once Accessibility is granted
+    /// again.
+    private func recoverEventTapIfNeeded() {
+        // A tap that is only disabled is left alone: the tap callback already
+        // re-enables one the system switched off, and the shortcut recorder
+        // switches it off on purpose while it records.
+        guard let tap = _eventTap, permissionTimer == nil, !CFMachPortIsValid(tap) else { return }
+        wplog("recoverEventTap: tap is no longer usable, waiting for Accessibility permission…")
+        _eventTap = nil
+        startPermissionPolling()
     }
 
     private func tryCreateEventTap() -> Bool {
