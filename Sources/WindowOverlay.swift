@@ -221,6 +221,10 @@ class WindowOverlay: NSPanel {
                 }
             } catch {
                 wplog("overlay: SCShareableContent error: \(error)")
+                // Without Screen Recording permission every retry fails the same
+                // way, and on macOS 27 each one puts the permission prompt back
+                // up a second after it was dismissed. Wait for the next pin.
+                if (error as NSError).code == SCStreamError.Code.userDeclined.rawValue { return }
                 scheduleResolveRetry(thenStartStream: thenStartStream)
             }
         }
