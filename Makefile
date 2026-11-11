@@ -83,5 +83,8 @@ install: app
 	ditto "$(LOCAL_APP)" "$(INSTALL_DIR)/$(PRODUCT_NAME)" && \
 	echo "Installed $(INSTALL_DIR)/$(PRODUCT_NAME)"
 
+# Quit a copy already running from this bundle first; otherwise `open` just
+# brings the old process forward and the new build never starts.
 run: app
+	pkill -f "$(CURDIR)/$(LOCAL_APP)/Contents/MacOS/" && sleep 1 || true; \
 	open "$(LOCAL_APP)"
