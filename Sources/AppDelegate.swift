@@ -173,6 +173,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
         JorvikStatusItemVisibility.handleReopen()
+        // Launching the app again is the only way in when the menu-bar icon
+        // can't be seen: hidden by a menu-bar manager, or crowded out of the
+        // bar. Bring the icon back, as above, and open Settings so there is
+        // something to see.
+        openSettings()
         return true
     }
 
