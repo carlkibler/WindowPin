@@ -56,7 +56,10 @@ LOCAL_SIGN_FLAGS :=
 else
 LOCAL_SIGN_FLAGS := --options runtime --timestamp
 endif
-INSTALL_DIR      ?= $(HOME)/Applications
+# /Applications, not ~/Applications: on macOS 26 and later, menu bar managers
+# such as Bartender do not see the menu bar items of apps run from elsewhere.
+INSTALL_DIR      ?= /Applications
+LSREGISTER       := /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
 PLISTBUDDY       := /usr/libexec/PlistBuddy
 
 .PHONY: app install run
@@ -81,8 +84,13 @@ install: app
 	mkdir -p "$(INSTALL_DIR)" && \
 	rm -rf "$(INSTALL_DIR)/$(PRODUCT_NAME)" && \
 	ditto "$(LOCAL_APP)" "$(INSTALL_DIR)/$(PRODUCT_NAME)" && \
+	( $(LSREGISTER) -u "$(CURDIR)/$(LOCAL_APP)" >/dev/null 2>&1 || true ) && \
 	echo "Installed $(INSTALL_DIR)/$(PRODUCT_NAME)"
 
+# `install` leaves only the installed copy known to Launch Services; a second
+# registered copy of the app in the build folder confuses System Settings'
+# permission lists.
+#
 # Quit a copy already running from this bundle first; otherwise `open` just
 # brings the old process forward and the new build never starts.
 run: app

@@ -175,13 +175,12 @@ Updates are handled by [Sparkle](https://sparkle-project.org). WindowPin checks 
 
 ## Permissions
 
-WindowPin requires two macOS permissions:
+WindowPin requires two macOS permissions. A setup window asks for both the first time WindowPin runs, shows each one as it is granted, and comes back at launch for as long as either is missing. You can also reach it from the menu (**Finish Setting Up…**) or by opening WindowPin again.
 
 ### Accessibility (required)
 
 Needed for the global keyboard shortcut, for scrolling pinned windows, and for bringing windows to the front.
 
-- Prompted automatically on first launch
 - Grant in: **System Settings → Privacy & Security → Accessibility**
 - Without this, the keyboard shortcut will not work
 
@@ -189,9 +188,8 @@ Needed for the global keyboard shortcut, for scrolling pinned windows, and for b
 
 Needed to capture window content for the live overlay.
 
-- Prompted when you first pin a window
 - Grant in: **System Settings → Privacy & Security → Screen Recording**
-- Without this, overlays will appear blank
+- Without this, WindowPin will not pin a window. macOS may only apply the permission when WindowPin restarts; the setup window has a button for that
 
 ## Building from Source
 
@@ -204,7 +202,7 @@ git clone https://github.com/PerpetualBeta/WindowPin.git
 cd WindowPin
 make app       # builds .build/local/WindowPin.app, ad-hoc signed
 make run       # builds and opens it
-make install   # copies it to ~/Applications (set INSTALL_DIR to change)
+make install   # copies it to /Applications (set INSTALL_DIR to change)
 ```
 
 A local build has no updater: Sparkle is left out, so it never checks for or offers updates.
@@ -233,6 +231,10 @@ Make sure WindowPin has **Accessibility** permission in System Settings → Priv
 ### Overlays are blank
 
 Grant **Screen Recording** permission in System Settings → Privacy & Security → Screen Recording. A restart of WindowPin may be required after granting.
+
+### The menu bar icon is missing, or a menu bar manager cannot see it
+
+Run WindowPin from `/Applications`. On macOS 26 and later, menu bar managers such as Bartender do not see the items of apps run from anywhere else. Opening WindowPin again while it is running brings up its window, so it can always be reached without the icon.
 
 ### An overlay is stuck on screen
 
