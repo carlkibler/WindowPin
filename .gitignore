@@ -24,3 +24,4 @@ DerivedData/
 *.swp
 *.swo
 .claude/
+local.mk

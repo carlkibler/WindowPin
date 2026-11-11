@@ -25,6 +25,10 @@ ENTITLEMENTS     := WindowPin.entitlements
 
 JORVIK_RELEASE   ?= ../jorvik-release
 
+# Personal settings for the local build (signing identity, bundle ID), kept
+# out of the repo. See the local build section below.
+-include local.mk
+
 ifneq ($(wildcard $(JORVIK_RELEASE)/release.mk),)
 include $(JORVIK_RELEASE)/release.mk
 else
@@ -43,6 +47,15 @@ endif
 # release.mk (which turns on .ONESHELL and bash) is included.
 LOCAL_APP        := .build/local/$(PRODUCT_NAME)
 LOCAL_BUNDLE_ID  ?= $(BUNDLE_ID)
+# "-" signs ad hoc. Set a Developer ID ("Developer ID Application: …") to sign
+# with the hardened runtime and a secure timestamp; a stable signature also
+# keeps Accessibility and Screen Recording granted across rebuilds.
+LOCAL_SIGN_ID    ?= -
+ifeq ($(LOCAL_SIGN_ID),-)
+LOCAL_SIGN_FLAGS :=
+else
+LOCAL_SIGN_FLAGS := --options runtime --timestamp
+endif
 INSTALL_DIR      ?= $(HOME)/Applications
 PLISTBUDDY       := /usr/libexec/PlistBuddy
 
@@ -60,7 +73,8 @@ app:
 		$(PLISTBUDDY) -c "Delete :$$KEY" "$(LOCAL_APP)/Contents/Info.plist" 2>/dev/null || true; \
 	done && \
 	$(PLISTBUDDY) -c "Set :CFBundleIdentifier $(LOCAL_BUNDLE_ID)" "$(LOCAL_APP)/Contents/Info.plist" && \
-	codesign --force --sign - --entitlements $(ENTITLEMENTS) "$(LOCAL_APP)" && \
+	codesign --force --sign "$(LOCAL_SIGN_ID)" $(LOCAL_SIGN_FLAGS) --entitlements $(ENTITLEMENTS) "$(LOCAL_APP)" && \
+	codesign --verify --strict "$(LOCAL_APP)" && \
 	echo "Built $(LOCAL_APP)"
 
 install: app
