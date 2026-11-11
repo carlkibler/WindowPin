@@ -31,8 +31,10 @@ enum WindowDetector {
 
         var axTitle: String?
         var axBounds: CGRect?
+        var axWindowID: CGWindowID?
 
         if axResult == .success, let axWindow = axWindowRef {
+            axWindowID = WindowLevelManager.windowID(of: axWindow as! AXUIElement)
             // Get title
             var titleRef: AnyObject?
             if AXUIElementCopyAttributeValue(axWindow as! AXUIElement, kAXTitleAttribute as CFString, &titleRef) == .success {
@@ -59,7 +61,24 @@ enum WindowDetector {
         let targetPID = frontApp.processIdentifier
         let appName = frontApp.localizedName ?? "Unknown"
 
-        // Try exact PID + title match first
+        // The focused window's own number, when the app gives it. Titles are
+        // not unique (two Terminal windows both called "zsh") and read as
+        // empty without Screen Recording, so the matches below are fallbacks.
+        if let focusedID = axWindowID {
+            for entry in windowList {
+                guard let pid = entry[kCGWindowOwnerPID as String] as? pid_t,
+                      pid == targetPID,
+                      let wid = entry[kCGWindowNumber as String] as? UInt32,
+                      wid == focusedID,
+                      let layer = entry[kCGWindowLayer as String] as? Int,
+                      layer == 0 else { continue }
+
+                let name = entry[kCGWindowName as String] as? String ?? ""
+                return ForeignWindow(windowID: wid, ownerPID: pid, ownerName: appName, windowTitle: name)
+            }
+        }
+
+        // Then exact PID + title match
         if let title = axTitle, !title.isEmpty {
             for entry in windowList {
                 guard let pid = entry[kCGWindowOwnerPID as String] as? pid_t,

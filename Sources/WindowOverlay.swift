@@ -6,7 +6,7 @@ import ScreenCaptureKit
 /// unchanged for many macOS releases and relied on by window managers that
 /// need to join the two worlds; there is no public equivalent.
 @_silgen_name("_AXUIElementGetWindow")
-private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
+func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
 
 /// A floating panel that mirrors a foreign window's content via a live
 /// ScreenCaptureKit stream. Acts as a live "picture-in-picture" view that
