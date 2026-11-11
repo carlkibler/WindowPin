@@ -14,6 +14,11 @@ let package = Package(
                 .linkedFramework("ScreenCaptureKit"),
                 .linkedFramework("ServiceManagement"),
             ]
-        )
+        ),
+        .testTarget(
+            name: "WindowPinTests",
+            dependencies: ["WindowPin"],
+            path: "Tests/WindowPinTests"
+        ),
     ]
 )
