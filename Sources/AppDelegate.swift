@@ -310,7 +310,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleFrontmost(_ sender: NSMenuItem) {
         guard let fw = sender.representedObject as? ForeignWindow else { return }
+        let wasPinned = tracker.isPinned(windowID: fw.windowID)
         tracker.toggle(window: fw)
+        showPinFeedback(wasPinned: wasPinned, window: fw)
     }
 
     @objc private func unpinMenuItem(_ sender: NSMenuItem) {
@@ -440,9 +442,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let wasPinned = tracker.isPinned(windowID: fw.windowID)
         tracker.toggle(window: fw)
+        showPinFeedback(wasPinned: wasPinned, window: fw)
         let action = wasPinned ? "Unpinned" : "Pinned"
         let title = fw.windowTitle.isEmpty ? fw.ownerName : fw.windowTitle
         wplog("togglePin: \(action) '\(title)' (wid=\(fw.windowID))")
+    }
+
+    private func showPinFeedback(wasPinned: Bool, window fw: ForeignWindow) {
+        let isPinned = tracker.isPinned(windowID: fw.windowID)
+        // Neither pinned before nor now: the pin was refused (no Screen Recording).
+        let message = isPinned ? "📌  Pinned" : wasPinned ? "Unpinned" : "Can't pin: allow Screen Recording"
+        PinFeedbackHUD.show(message, windowID: CGWindowID(fw.windowID))
     }
 
     // MARK: - Shortcut configuration
