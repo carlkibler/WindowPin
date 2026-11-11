@@ -60,6 +60,8 @@ final class PinnedWindowTracker {
 
 
 
+    func overlay(for windowID: UInt32) -> WindowOverlay? { overlays[windowID] }
+
     func isPinned(windowID: UInt32) -> Bool {
         pinnedWindows.contains(where: { $0.windowID == windowID })
     }
