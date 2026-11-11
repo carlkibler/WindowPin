@@ -9,10 +9,10 @@ let package = Package(
             name: "WindowPin",
             path: "Sources",
             linkerSettings: [
-                .unsafeFlags(["-framework", "AppKit"]),
-                .unsafeFlags(["-framework", "ApplicationServices"]),
-                .unsafeFlags(["-framework", "ScreenCaptureKit"]),
-                .unsafeFlags(["-framework", "ServiceManagement"]),
+                .linkedFramework("AppKit"),
+                .linkedFramework("ApplicationServices"),
+                .linkedFramework("ScreenCaptureKit"),
+                .linkedFramework("ServiceManagement"),
             ]
         )
     ]
