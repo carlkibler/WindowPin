@@ -76,9 +76,11 @@ private struct SetupView: View {
                 Image(nsImage: NSApp.applicationIconImage)
                     .resizable()
                     .frame(width: 56, height: 56)
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(allGranted ? "WindowPin is ready" : "Set up WindowPin")
                         .font(.title2.weight(.semibold))
+                        .accessibilityAddTraits(.isHeader)
                     Text("WindowPin keeps a window in view above your other apps. macOS asks your permission for the two things that takes.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -148,6 +150,7 @@ private struct SetupView: View {
         }
         .padding(24)
         .frame(width: 520)
+        .onExitCommand(perform: close)
     }
 }
 
@@ -168,6 +171,10 @@ private struct PermissionRow: View {
                     .font(.title2)
                     .frame(width: 30)
                     .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+                // The text takes all the width the status or button leaves.
+                // With a spacer beside it the two shared the row, and the
+                // text wrapped well short of the room it had.
                 VStack(alignment: .leading, spacing: 3) {
                     Text(title).font(.headline)
                     Text(reason)
@@ -175,13 +182,22 @@ private struct PermissionRow: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                Spacer(minLength: 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
                 if granted {
-                    Label("Allowed", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.callout.weight(.medium))
+                    // Only the tick is green. Green text is too faint to
+                    // read on a light window.
+                    Label {
+                        Text("Allowed")
+                    } icon: {
+                        Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    }
+                    .font(.callout.weight(.medium))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(title): allowed")
                 } else {
                     Button(buttonTitle, action: action)
+                        // "Allow…" alone says nothing out of the row's context.
+                        .accessibilityLabel("\(buttonTitle.replacingOccurrences(of: "\u{2026}", with: "")), for \(title)")
                 }
             }
             if let note {
@@ -198,5 +214,9 @@ private struct PermissionRow: View {
         .padding(14)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.05)))
+        // An edge as well as a tint, so the rows still read as rows with
+        // Increase Contrast on.
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(Color(nsColor: .separatorColor)))
+        .accessibilityElement(children: .contain)
     }
 }

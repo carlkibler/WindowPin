@@ -33,6 +33,15 @@ struct WindowPinSettingsContent: View {
         return "Clicks and scrolls on an overlay are sent to the pinned window. \u{2318}-click an overlay to switch to the real window. When off, any click switches to the real window."
     }
 
+    /// Only the tick is green: green text is too faint to read on a light window.
+    private static var grantedLabel: some View {
+        Label {
+            Text("Granted")
+        } icon: {
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+        }
+    }
+
     // Everything below is a plain grouped form: no fonts, sizes or spacing of
     // its own. A second `Text` in a label is the row's description, which the
     // form sets in its own secondary style.
@@ -99,8 +108,7 @@ struct WindowPinSettingsContent: View {
         Section("Permissions") {
             LabeledContent {
                 if accessibility.isGranted {
-                    Label("Granted", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                    Self.grantedLabel
                 } else {
                     Button("Grant Access") {
                         JorvikPermissionWatcher.promptForAccessibility()
@@ -116,8 +124,7 @@ struct WindowPinSettingsContent: View {
 
             LabeledContent {
                 if screenRecording.isGranted {
-                    Label("Granted", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
+                    Self.grantedLabel
                 } else {
                     Button("Grant Access") {
                         // The prompt only ever appears once; after a denial this silently
