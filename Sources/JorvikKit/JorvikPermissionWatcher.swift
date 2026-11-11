@@ -91,6 +91,7 @@ public final class JorvikPermissionWatcher: NSObject, ObservableObject {
     private let announcement: Notification.Name?
     private var poll: Timer?
     private var quietUntil: Date = .distantPast
+    private var settle: DispatchWorkItem?
 
     /// - Parameters:
     ///   - announcement: a distributed notification that signals this permission may have
@@ -162,11 +163,16 @@ public final class JorvikPermissionWatcher: NSObject, ObservableObject {
         // Deliberately no read here: the announcement means the cached answer is about to
         // become wrong, not that the new one is available yet.
         quietUntil = Date().addingTimeInterval(Self.commitSeconds)
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.commitSeconds) { [weak self] in
+        // Replace any earlier timer: left running, it would end this announcement's quiet
+        // window early and let a read pin the stale answer all over again.
+        settle?.cancel()
+        let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.quietUntil = .distantPast
             self.reread()
         }
+        settle = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.commitSeconds, execute: work)
     }
 
     @objc private func reactivated() { reread() }
