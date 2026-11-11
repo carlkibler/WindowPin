@@ -897,7 +897,9 @@ class WindowOverlay: NSPanel {
         let w = bounds["Width"] ?? 0
         let h = bounds["Height"] ?? 0
 
-        let screenHeight = NSScreen.screens[0].frame.height
+        // The screen list can be empty for a moment while displays are being
+        // reconfigured; there is no frame to give until it is back.
+        guard let screenHeight = NSScreen.screens.first?.frame.height else { return nil }
         let nsY = screenHeight - y - h
 
         return NSRect(x: x, y: nsY, width: w, height: h)
