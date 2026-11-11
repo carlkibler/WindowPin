@@ -3,7 +3,9 @@ import CoreGraphics
 import ApplicationServices
 import SwiftUI
 import ServiceManagement
+#if canImport(Sparkle)
 import Sparkle
+#endif
 
 // MARK: - Global CGEvent tap callback (must be a C-compatible function)
 
@@ -62,12 +64,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem?
     private let tracker = PinnedWindowTracker()
 
+    // Sparkle is optional: the release build links it, and a build without it
+    // (plain `swift build`, `make app`) simply has no updater.
+    #if canImport(Sparkle)
     let userDriverDelegate = WindowPinUserDriverDelegate()
     lazy var sparkleUpdater = SPUStandardUpdaterController(
         startingUpdater: true,
         updaterDelegate: nil,
         userDriverDelegate: userDriverDelegate
     )
+    #endif
 
     private var lastForeignWindow: ForeignWindow?
     private var focusObserver: NSObjectProtocol?
@@ -108,7 +114,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         migrateLegacyPillColorKey()
 
         createStatusItem()
+        #if canImport(Sparkle)
         _ = sparkleUpdater  // touch lazy to start the updater
+        #endif
 
         NotificationCenter.default.addObserver(
             forName: JorvikStatusItemVisibility.didChangeNotification,
@@ -266,9 +274,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsItem.target = self
         menu.addItem(settingsItem)
 
+        #if canImport(Sparkle)
         let updatesItem = NSMenuItem(title: "Check for Updates\u{2026}", action: #selector(checkForUpdates(_:)), keyEquivalent: "")
         updatesItem.target = self
         menu.addItem(updatesItem)
+        #endif
 
         menu.addItem(NSMenuItem.separator())
         menu.addItem(NSMenuItem(title: "Quit WindowPin", action: #selector(quit), keyEquivalent: "q"))
@@ -297,10 +307,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - About & Settings
 
+    #if canImport(Sparkle)
     @objc func checkForUpdates(_ sender: Any?) {
         NSRunningApplication.current.activate(options: [.activateAllWindows])
         sparkleUpdater.checkForUpdates(sender)
     }
+    #endif
 
     @objc private func openAbout() {
         JorvikAboutView.showWindow(
@@ -478,6 +490,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 }
 
+#if canImport(Sparkle)
 // MARK: - Sparkle User Driver Delegate
 
 /// Keeps Sparkle's update UI visible across the whole session, including
@@ -534,3 +547,4 @@ final class WindowPinUserDriverDelegate: NSObject, SPUStandardUserDriverDelegate
         }
     }
 }
+#endif

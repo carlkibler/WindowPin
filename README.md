@@ -197,15 +197,24 @@ Needed to capture window content for the live overlay.
 
 WindowPin uses Swift Package Manager. No Xcode project is required.
 
-The build is driven by the shared [`release.mk`](https://github.com/PerpetualBeta/jorvik-release) Make include, so `jorvik-release` has to be checked out **beside this repo** — the Makefile looks for it at `../jorvik-release/`. macOS ships GNU Make 3.81 as `make`, which is too old, so `gmake` comes from [Homebrew](https://brew.sh).
+For a local build, you need only the Xcode command line tools:
+
+```bash
+git clone https://github.com/PerpetualBeta/WindowPin.git
+cd WindowPin
+make app       # builds .build/local/WindowPin.app, ad-hoc signed
+make run       # builds and opens it
+make install   # copies it to ~/Applications (set INSTALL_DIR to change)
+```
+
+A local build has no updater: Sparkle is left out, so it never checks for or offers updates.
+
+The signed, notarised release build, which embeds Sparkle, is driven by the shared [`release.mk`](https://github.com/PerpetualBeta/jorvik-release) Make include. The Makefile looks for it at `../jorvik-release/`, or wherever `JORVIK_RELEASE` points. It needs GNU Make 4+ (`gmake`, from [Homebrew](https://brew.sh)), because macOS ships 3.81 as `make`.
 
 ```bash
 brew install make   # GNU Make 4+, if you do not already have gmake
 git clone https://github.com/PerpetualBeta/jorvik-release.git
-git clone https://github.com/PerpetualBeta/WindowPin.git
-cd WindowPin
-gmake build
-open .build/WindowPin.app
+gmake -C WindowPin build
 ```
 
 ## Troubleshooting
