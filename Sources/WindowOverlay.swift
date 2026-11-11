@@ -82,6 +82,7 @@ class WindowOverlay: NSPanel {
     /// The panel's frame after the last change that was accounted for, so a
     /// resize can tell which edges moved and by how much.
     private var lastPanelFrame: NSRect = .zero
+    private var resizeObserver: NSObjectProtocol?
     /// A selection smaller than this either way is taken as a click, not a
     /// crop. It is also about as small as a pin can usefully be.
     private static let minimumCropSide: CGFloat = 16
@@ -189,7 +190,7 @@ class WindowOverlay: NSPanel {
         // Resolve the SCWindow asynchronously
         resolveSCWindow()
 
-        NotificationCenter.default.addObserver(
+        resizeObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.didResizeNotification, object: self, queue: .main
         ) { [weak self] _ in
             self?.cropFollowsResize()
@@ -441,6 +442,17 @@ class WindowOverlay: NSPanel {
         }
     }
 
+    /// Drop any crop, move or resize gesture in progress. A pin that goes
+    /// behind no longer sees the release that would end it, which would
+    /// leave the selection drawn and the next press read as part of it.
+    private func cancelGesture() {
+        selectionStart = nil
+        selectionShade.isHidden = true
+        selectionBorder.isHidden = true
+        moveStart = nil
+        systemPressInProgress = false
+    }
+
     /// The selection from where the option-drag started to `point`, both in
     /// the panel's points, limited to the panel.
     private func selectionRect(to point: NSPoint) -> CGRect? {
@@ -677,6 +689,7 @@ class WindowOverlay: NSPanel {
         guard isPinVisible else { return }
         wplog("overlay: sendBehind wid=\(targetWindowID)")
         isPinVisible = false
+        cancelGesture()
         stopStream()
         stopFrameSync()
         level = NSWindow.Level(rawValue: Int(CGWindowLevelForKey(.normalWindow)) - 1)
@@ -688,6 +701,7 @@ class WindowOverlay: NSPanel {
         wplog("overlay: hideOverlay wid=\(targetWindowID)")
         AXScroller.forget(windowID: targetWindowID)
         isPinVisible = false
+        cancelGesture()
         stopStream()
         stopFrameSync()
         orderOut(nil)
@@ -910,6 +924,7 @@ class WindowOverlay: NSPanel {
     }
 
     deinit {
+        if let resizeObserver { NotificationCenter.default.removeObserver(resizeObserver) }
         frameSyncTimer?.invalidate()
         if let stream = stream {
             stream.stopCapture { _ in }
