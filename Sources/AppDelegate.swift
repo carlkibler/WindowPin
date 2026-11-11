@@ -60,9 +60,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // that a hung one is no worse than a hiccup.
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), 1.0)
 
-        let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
-        let trusted = AXIsProcessTrustedWithOptions(options)
-        wplog("Accessibility trusted: \(trusted)")
+        // No prompt here. The system's own prompt used to go up at every
+        // launch without Accessibility, login included; the setup window asks
+        // instead, once, and says what it is for.
+        wplog("Accessibility trusted: \(AXIsProcessTrusted())")
         // Accessibility is NOT the permission that lets an app post synthetic
         // events. Apple keeps three independent TCC buckets — Accessibility,
         // PostEvent and ListenEvent — as three separate rows, each tracked on
@@ -92,9 +93,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.updateIcon()
             self?.badges?.refresh()
         }
-        tracker.onCaptureDenied = { pw in
+        tracker.onCaptureDenied = { [weak self] pw in
             PinFeedbackHUD.show("Unpinned: allow Screen Recording", windowID: CGWindowID(pw.windowID))
+            self?.showSetup()
         }
+        tracker.onNeedsScreenRecording = { [weak self] in self?.showSetup() }
         badges = PinBadgeController(tracker: tracker) { [weak self] fw in
             guard let self else { return }
             let wasPinned = self.tracker.isPinned(windowID: fw.windowID)
@@ -133,6 +136,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
 
         wplog("Launched successfully")
+
+        if SetupWindow.shouldShowAtLaunch { showSetup() }
+    }
+
+    @objc private func showSetup() {
+        SetupWindow.show(shortcut: shortcutDisplayString())
     }
 
     // One-shot removal of the user-chosen pill colour key from the old design.
@@ -156,8 +165,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Launching the app again is the only way in when the menu-bar icon
         // can't be seen: hidden by a menu-bar manager, or crowded out of the
         // bar. Bring the icon back, as above, and open Settings so there is
-        // something to see.
-        openSettings()
+        // something to see; or setup, while that is what stands in the way.
+        if SetupWindow.isMissingPermission { showSetup() } else { openSettings() }
         return true
     }
 
@@ -166,8 +175,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func createStatusItem() {
         guard JorvikStatusItemVisibility.isVisible else { return }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        // Persist the item's menu-bar slot across launches (and let a user ⌘-drag stick).
-        statusItem?.autosaveName = "WindowPinStatusItem"
+        // No autosave name of our own. macOS gives the item the default one,
+        // "Item-0", and remembers its place under that; menu bar managers such
+        // as Bartender look items up by the default name and did not find this
+        // one under a custom name. They also go by the label and tooltip, so
+        // those are the app's name and never change.
+        statusItem?.button?.toolTip = "WindowPin"
+        statusItem?.button?.setAccessibilityLabel("WindowPin")
         updateIcon()
 
         let menu = NSMenu()
@@ -204,6 +218,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         aboutItem.target = self
         menu.addItem(aboutItem)
         menu.addItem(NSMenuItem.separator())
+
+        if SetupWindow.isMissingPermission {
+            let setupItem = NSMenuItem(title: "\u{26A0}\u{FE0E} Finish Setting Up\u{2026}", action: #selector(showSetup), keyEquivalent: "")
+            setupItem.target = self
+            menu.addItem(setupItem)
+            menu.addItem(NSMenuItem.separator())
+        }
 
         // Pin/Unpin action
         // The remembered window is only a fallback, and it may have been closed
@@ -387,9 +408,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func showPinFeedback(wasPinned: Bool, window fw: ForeignWindow) {
         let isPinned = tracker.isPinned(windowID: fw.windowID)
-        // Neither pinned before nor now: the pin was refused (no Screen Recording).
-        let message = isPinned ? "📌  Pinned" : wasPinned ? "Unpinned" : "Can't pin: allow Screen Recording"
-        PinFeedbackHUD.show(message, windowID: CGWindowID(fw.windowID))
+        // Neither pinned before nor now: the pin was refused for want of Screen
+        // Recording. The setup window, which the tracker has just asked for,
+        // says so; a badge under it would only be in the way.
+        guard isPinned || wasPinned else { return }
+        PinFeedbackHUD.show(isPinned ? "📌  Pinned" : "Unpinned", windowID: CGWindowID(fw.windowID))
     }
 
     // MARK: - Shortcut configuration

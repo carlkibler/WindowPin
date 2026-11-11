@@ -44,9 +44,10 @@ final class PinnedWindowTracker {
     /// Called when a pin was taken down because Screen Recording was refused
     /// after the pin was made, so the user can be told why it went.
     var onCaptureDenied: ((PinnedWindow) -> Void)?
+    /// Called when a pin was refused because Screen Recording is not granted.
+    var onNeedsScreenRecording: (() -> Void)?
 
     init() {
-        startPolling()
         observeAppActivation()
         observeAppTermination()
         observeWakeAndDisplays()
@@ -80,7 +81,7 @@ final class PinnedWindowTracker {
             windowTitle: window.windowTitle
         )
         guard !pinnedWindows.contains(pw) else { return }
-        guard Self.hasScreenRecording() else { return }
+        guard hasScreenRecording() else { return }
 
         pinnedWindows.insert(pw)
 
@@ -105,29 +106,19 @@ final class PinnedWindowTracker {
             overlay.bringToFront()
         }
 
-        onChange?()
+        pinsChanged()
     }
 
-    /// Whether Screen Recording is granted, asking for it if not.
+    /// Whether Screen Recording is granted. If not, the owner is told, and
+    /// shows the setup window, which asks for it and says why.
     ///
-    /// A pin without it is blank, and left to itself ScreenCaptureKit put the
-    /// permission prompt back up every time it failed. So ask before pinning
-    /// instead. The first request shows the system prompt and adds WindowPin to
-    /// the list in System Settings; macOS shows that prompt only once, so after
-    /// that go straight to the setting.
-    private static var requestedScreenRecording = false
-
-    private static func hasScreenRecording() -> Bool {
+    /// This used to ask for itself: the system's prompt the first time, and
+    /// System Settings thrown open on every refused pin after that, from a
+    /// shortcut that works in any app.
+    private func hasScreenRecording() -> Bool {
         if CGPreflightScreenCaptureAccess() { return true }
         wplog("pin: Screen Recording not granted")
-        if !requestedScreenRecording {
-            requestedScreenRecording = true
-            if CGRequestScreenCaptureAccess() { return true }
-            return false
-        }
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-            NSWorkspace.shared.open(url)
-        }
+        onNeedsScreenRecording?()
         return false
     }
 
@@ -136,7 +127,7 @@ final class PinnedWindowTracker {
         overlays[windowID]?.hideOverlay()
         overlays[windowID] = nil
         pinnedWindows.remove(pw)
-        onChange?()
+        pinsChanged()
     }
 
     func unpinAll() {
@@ -145,7 +136,7 @@ final class PinnedWindowTracker {
         }
         overlays.removeAll()
         pinnedWindows.removeAll()
-        onChange?()
+        pinsChanged()
     }
 
     func updateCaptureRate() {
@@ -272,10 +263,19 @@ final class PinnedWindowTracker {
 
     // MARK: - Polling for closed windows
 
-    private func startPolling() {
-        pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-            self?.pruneClosedWindows()
+    /// Tell the owner the pinned set changed, and look for closed windows only
+    /// while there are pins to lose. With nothing pinned WindowPin has no
+    /// timer running at all.
+    private func pinsChanged() {
+        if pinnedWindows.isEmpty {
+            pollTimer?.invalidate()
+            pollTimer = nil
+        } else if pollTimer == nil {
+            pollTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                self?.pruneClosedWindows()
+            }
         }
+        onChange?()
     }
 
     private func pruneClosedWindows() {
@@ -288,7 +288,7 @@ final class PinnedWindowTracker {
             overlays[pw.windowID] = nil
             pinnedWindows.remove(pw)
         }
-        onChange?()
+        pinsChanged()
     }
 
     // MARK: - App termination
@@ -309,7 +309,7 @@ final class PinnedWindowTracker {
                 self.overlays[pw.windowID] = nil
                 self.pinnedWindows.remove(pw)
             }
-            self.onChange?()
+            self.pinsChanged()
         }
     }
 }

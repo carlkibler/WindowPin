@@ -25,61 +25,166 @@ final class PinBadgeController {
     private var pinnedBadges: [UInt32: BadgePanel] = [:]
     private let focusedBadge = BadgePanel(pinned: false)
     private var focusedWindow: ForeignWindow?
-    private var timer: Timer?
-    private var tick = 0
-    /// Ticks left to run at the full rate after something changed. See `update`.
-    private var fastTicks = 0
-    private var activationObserver: NSObjectProtocol?
+
+    // Nothing here runs on a timer while nothing is happening. A badge only
+    // has to move when a window does, and every way a window can change says
+    // so: the active app changes, the app reports a window focused, moved or
+    // resized, a mouse button goes down (the start of every drag), the Space
+    // changes, or a pin is made or removed. Each of those calls `refresh`,
+    // which follows closely for a second and then stops.
+    //
+    // This used to be one timer, ten times a second, for as long as WindowPin
+    // was running, which kept an app that is idle nearly all day awake.
+
+    /// Runs ten times a second, only for a moment after something changed and
+    /// while a mouse button is held.
+    private var followTimer: Timer?
+    private var followUntil = Date.distantPast
+    private var followTicks = 0
+    /// Runs twice a second, only while something is pinned: a showing pin
+    /// follows its window on a timer of its own, and its badge follows it.
+    private var pinnedTimer: Timer?
+
+    private var observers: [(NotificationCenter, NSObjectProtocol)] = []
+    private var mouseMonitor: Any?
+    /// Accessibility notifications from the active app.
+    private var appObserver: AXObserver?
+    private var observedPID: pid_t = 0
 
     init(tracker: PinnedWindowTracker, toggle: @escaping (ForeignWindow) -> Void) {
         self.tracker = tracker
         self.toggle = toggle
-        // Common modes, so it keeps up during a drag.
-        let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.update() }
-        // Nothing here is to the tenth of a second, so let the system line the
-        // wake-ups up with others.
-        t.tolerance = 0.03
-        RunLoop.main.add(t, forMode: .common)
-        timer = t
-        // Switching apps raises windows and brings pins up or sends them
-        // behind, all of which a badge has to follow at once.
-        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+
+        let workspace = NSWorkspace.shared.notificationCenter
+        for name in [NSWorkspace.didActivateApplicationNotification,
+                     NSWorkspace.activeSpaceDidChangeNotification,
+                     NSWorkspace.didHideApplicationNotification,
+                     NSWorkspace.didUnhideApplicationNotification,
+                     NSWorkspace.didTerminateApplicationNotification] {
+            observe(workspace, name)
+        }
+        observe(.default, NSApplication.didChangeScreenParametersNotification)
+        // The two switches in Settings.
+        observe(.default, UserDefaults.didChangeNotification)
+
+        // Mouse buttons need no permission to watch, unlike keys. Clicks on
+        // WindowPin's own windows are not reported here; a click on a badge
+        // changes the pinned set, which refreshes by itself.
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .leftMouseUp]
         ) { [weak self] _ in self?.refresh() }
+
+        refresh()
     }
 
     deinit {
-        timer?.invalidate()
-        if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
+        followTimer?.invalidate()
+        pinnedTimer?.invalidate()
+        observers.forEach { $0.0.removeObserver($0.1) }
+        if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+        stopObservingApp()
+    }
+
+    private func observe(_ center: NotificationCenter, _ name: Notification.Name) {
+        observers.append((center, center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+            self?.refresh()
+        }))
     }
 
     // MARK: - Update
 
-    /// Bring the badges up to date now, and keep them close for the next
-    /// second. Called when a window is pinned or unpinned and when the active
-    /// app changes; a pin coming up for the first time takes a moment to
-    /// appear, and its badge has to land on it when it does.
+    /// Bring the badges up to date now, and follow closely for the next
+    /// second: what was just reported is often the start of something still
+    /// going on, such as a drag, an animated resize, or a pin fading in.
     func refresh() {
-        fastTicks = 10
+        observeFrontmostApp()
+        readFocusedWindow()
+        update()
+
+        followUntil = Date().addingTimeInterval(1)
+        if followTimer == nil {
+            followTicks = 0
+            // Common modes, so it keeps up during a drag.
+            let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.follow() }
+            RunLoop.main.add(t, forMode: .common)
+            followTimer = t
+        }
+
+        let anyPinned = Self.showsPinned && !tracker.pinnedWindows.isEmpty
+        if anyPinned, pinnedTimer == nil {
+            let t = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in self?.update() }
+            t.tolerance = 0.1
+            RunLoop.main.add(t, forMode: .common)
+            pinnedTimer = t
+        } else if !anyPinned {
+            pinnedTimer?.invalidate()
+            pinnedTimer = nil
+        }
+    }
+
+    private func follow() {
+        guard Date() < followUntil || NSEvent.pressedMouseButtons != 0 else {
+            followTimer?.invalidate()
+            followTimer = nil
+            return
+        }
+        followTicks += 1
+        // Asking the front app for its focused window is an Accessibility call,
+        // so do it a few times a second rather than every tick.
+        if followTicks % 3 == 0 { readFocusedWindow() }
+        update()
+    }
+
+    private func update() {
         updatePinnedBadges()
         updateFocusedBadge()
     }
 
-    /// Ten times a second keeps a badge on a window being dragged, but a
-    /// window is only dragged with a mouse button down. The rest of the time
-    /// the badges are checked three times a second, which is as often as the
-    /// focused window was being read anyway. This runs for as long as
-    /// WindowPin does, so two ticks in three now cost next to nothing.
-    private func update() {
-        tick += 1
-        let fast = fastTicks > 0 || NSEvent.pressedMouseButtons != 0
-        if fastTicks > 0 { fastTicks -= 1 }
-        guard fast || tick % 3 == 0 else { return }
-        updatePinnedBadges()
-        // Asking the front app for its focused window is an Accessibility call,
-        // so do it a few times a second rather than every tick.
-        if tick % 3 == 0 { focusedWindow = Self.showsFocused ? Self.focusedForeignWindow() : nil }
-        updateFocusedBadge()
+    private func readFocusedWindow() {
+        focusedWindow = Self.showsFocused ? Self.focusedForeignWindow() : nil
+    }
+
+    // MARK: - The active app's window changes
+
+    /// Ask the active app to report when its focused window changes and when
+    /// a window moves, is resized or is minimised. Registered on the app, the
+    /// notifications cover all its windows. This is what catches a change
+    /// made from the keyboard, where no mouse button goes down.
+    private func observeFrontmostApp() {
+        guard let app = NSWorkspace.shared.frontmostApplication else { return }
+        let pid = app.processIdentifier
+        guard pid != observedPID else { return }
+        stopObservingApp()
+        guard pid != ProcessInfo.processInfo.processIdentifier else { return }
+
+        var created: AXObserver?
+        guard AXObserverCreate(pid, badgeAXCallback, &created) == .success, let observer = created else { return }
+        let element = AXUIElementCreateApplication(pid)
+        // Registering waits on the app, on the main thread: never long.
+        AXUIElementSetMessagingTimeout(element, 0.1)
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        var registered = false
+        for name in [kAXFocusedWindowChangedNotification, kAXMainWindowChangedNotification,
+                     kAXWindowMovedNotification, kAXWindowResizedNotification,
+                     kAXWindowMiniaturizedNotification, kAXWindowDeminiaturizedNotification] {
+            if AXObserverAddNotification(observer, element, name as CFString, context) == .success {
+                registered = true
+            }
+        }
+        // Nothing registered: no Accessibility yet, or the app is not
+        // answering. Leave it unrecorded so the next refresh tries again.
+        guard registered else { return }
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
+        appObserver = observer
+        observedPID = pid
+    }
+
+    private func stopObservingApp() {
+        if let appObserver {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(appObserver), .commonModes)
+        }
+        appObserver = nil
+        observedPID = 0
     }
 
     private func updatePinnedBadges() {
@@ -168,6 +273,13 @@ final class PinBadgeController {
         return NSRect(x: b["X"] ?? 0, y: primary.frame.height - (b["Y"] ?? 0) - h,
                       width: b["Width"] ?? 0, height: h)
     }
+}
+
+/// Accessibility notifications arrive at a C function, on the main run loop.
+private func badgeAXCallback(_ observer: AXObserver, _ element: AXUIElement,
+                             _ notification: CFString, _ context: UnsafeMutableRawPointer?) {
+    guard let context else { return }
+    Unmanaged<PinBadgeController>.fromOpaque(context).takeUnretainedValue().refresh()
 }
 
 // MARK: - Badge window
