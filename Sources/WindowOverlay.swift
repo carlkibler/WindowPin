@@ -713,11 +713,15 @@ class WindowOverlay: NSPanel {
                 )
                 await MainActor.run {
                     self.contentLayer.contents = image
+                    // The pin may have been sent behind or unpinned while the
+                    // screenshot was being taken; it must stay that way.
+                    guard self.isPinVisible else { return }
                     self.fadeIn()
                 }
             } catch {
                 wplog("overlay: pre-show capture failed wid=\(targetWindowID): \(error)")
                 await MainActor.run {
+                    guard self.isPinVisible else { return }
                     self.fadeIn()
                 }
             }
