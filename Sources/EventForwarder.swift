@@ -81,6 +81,14 @@ enum EventForwarder {
         if cgType == .otherMouseDown || cgType == .otherMouseUp || cgType == .otherMouseDragged {
             cg.setIntegerValueField(.mouseEventButtonNumber, value: Int64(event.buttonNumber))
         }
+        // A new event carries no movement of its own, so a drag arrived as a
+        // series of positions with nothing between them. Views that work from
+        // the deltas rather than the position, such as a canvas being panned,
+        // saw the drag and did not move.
+        if cgType == .leftMouseDragged || cgType == .rightMouseDragged || cgType == .otherMouseDragged {
+            cg.setDoubleValueField(.mouseEventDeltaX, value: Double(event.deltaX))
+            cg.setDoubleValueField(.mouseEventDeltaY, value: Double(event.deltaY))
+        }
         addressToWindow(cg, windowID: windowID, pid: pid)
         cg.postToPid(pid)
     }
