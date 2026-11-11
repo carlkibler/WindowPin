@@ -393,12 +393,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Shortcut configuration
 
     private func loadShortcut() {
-        let kc = UserDefaults.standard.integer(forKey: "shortcutKeyCode")
-        let mod = UserDefaults.standard.integer(forKey: "shortcutModifiers")
-        if kc != 0 && mod != 0 {
-            shortcutKeyCode = UInt16(kc)
-            shortcutModifiers = NSEvent.ModifierFlags(rawValue: UInt(mod))
-        }
+        // Go by whether a binding was ever saved, not by its values. A bare
+        // function key is saved with no modifiers, and a cleared shortcut is
+        // saved as key code 0 with no modifiers; testing the values would throw
+        // both away on relaunch and bring back the default. A fresh install has
+        // nothing saved, so it keeps the default.
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: "shortcutKeyCode") != nil,
+              defaults.object(forKey: "shortcutModifiers") != nil else { return }
+        let kc = defaults.integer(forKey: "shortcutKeyCode")
+        let mod = defaults.integer(forKey: "shortcutModifiers")
+        shortcutKeyCode = UInt16(kc)
+        shortcutModifiers = NSEvent.ModifierFlags(rawValue: UInt(mod))
     }
 
     func saveShortcutAndUpdateTap() {
