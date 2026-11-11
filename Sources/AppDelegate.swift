@@ -76,6 +76,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     #endif
 
     private var lastForeignWindow: ForeignWindow?
+    private var badges: PinBadgeController?
     private var focusObserver: NSObjectProtocol?
 
     var shortcutKeyCode: UInt16 = 35
@@ -136,6 +137,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         tracker.onChange = { [weak self] in
             self?.updateIcon()
+        }
+        badges = PinBadgeController(tracker: tracker) { [weak self] fw in
+            guard let self else { return }
+            let wasPinned = self.tracker.isPinned(windowID: fw.windowID)
+            self.tracker.toggle(window: fw)
+            self.showPinFeedback(wasPinned: wasPinned, window: fw)
         }
 
         focusObserver = NSWorkspace.shared.notificationCenter.addObserver(

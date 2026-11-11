@@ -11,6 +11,8 @@ struct WindowPinSettingsContent: View {
     @AppStorage("captureRate") private var captureRate: Double = 30.0
     @AppStorage("forwardEvents") private var forwardEvents: Bool = true
     @AppStorage("pinToAllSpaces") private var pinToAllSpaces: Bool = false
+    @AppStorage(PinBadgeController.pinnedKey) private var badgePinned: Bool = true
+    @AppStorage(PinBadgeController.focusedKey) private var badgeFocused: Bool = true
 
     /// Both kept current by JorvikKit — see `JorvikPermissionWatcher`. These two rows used
     /// to be read inline in `body`, so nothing ever caused them to re-render and granting
@@ -50,6 +52,14 @@ struct WindowPinSettingsContent: View {
                 .onChange(of: pinToAllSpaces) { _, _ in
                     tracker.updateAllSpaces()
                 }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Toggle("Show a pin on pinned windows", isOn: $badgePinned)
+                Toggle("Show a pin on the window you're using", isOn: $badgeFocused)
+                Text("A pin button in the top-right corner of the title bar. Click it to pin or unpin that window.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
 
         Section("Shortcut") {
