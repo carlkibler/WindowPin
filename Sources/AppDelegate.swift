@@ -333,7 +333,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openSettings() {
         let trackerRef = tracker
         let delegate = self
-        JorvikSettingsView.showWindow(appName: "WindowPin") {
+        JorvikSettingsView.showWindow(appName: "WindowPin", showsLaunchAtLogin: false) {
             WindowPinSettingsContent(tracker: trackerRef, delegate: delegate)
         }
     }

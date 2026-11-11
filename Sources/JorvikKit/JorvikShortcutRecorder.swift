@@ -113,25 +113,20 @@ struct JorvikShortcutRecorder: View {
                                    defaultValue: "Hold \u{2318}, \u{2303} or \u{2325}, or press an F key")
                      : L10n.string("shortcut.press", defaultValue: "Press shortcut\u{2026}"))
                     .foregroundStyle(.orange)
-                    .font(.caption)
                 Button(L10n.string("shortcut.cancel", defaultValue: "Cancel")) {
                     stopRecording()
                 }
-                .font(.caption)
             } else {
                 Text(shortcutText)
                     .foregroundStyle(.secondary)
-                    .font(.caption)
                 if onClear != nil, isSet {
                     Button(L10n.string("shortcut.clear", defaultValue: "Clear")) {
                         onClear?()
                     }
-                    .font(.caption)
                 }
                 Button(L10n.string("shortcut.change", defaultValue: "Change\u{2026}")) {
                     startRecording()
                 }
-                .font(.caption)
             }
         }
         .onDisappear {

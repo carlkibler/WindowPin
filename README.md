@@ -156,14 +156,14 @@ When enabled, pinned overlays appear on every Mission Control space. When disabl
 
 ### Custom Keyboard Shortcut
 
-Open **Settings…** from the menu, find the **Shortcut** section, then press your desired key combination. The shortcut must include `command`, `control` or `option`, unless it is a function key: F1 to F20 can be used on their own.
+Open **Settings…** from the menu, click **Change…** in the **Pinning** section, then press your desired key combination. The shortcut must include `command`, `control` or `option`, unless it is a function key: F1 to F20 can be used on their own.
 
 **Clear** removes the shortcut entirely. With none bound, nothing is intercepted, and pinning is still available from the menu-bar icon.
 
 ### Menu Bar Icon
 
 - **Show icon in menu bar** — hide the menu-bar status icon while WindowPin keeps running; it remains reachable via its keyboard shortcut, if one is bound. If you have cleared that too, re-open WindowPin from Applications to bring the icon back. The choice persists across launches, including login auto-start. *Shown only on macOS 14–15 — on macOS 26 (Tahoe) and later, use System Settings → Menu Bar, which provides this natively.*
-- **Menu bar icon pill** — optional grey background for stronger contrast on busy or wallpaper-tinted menu bars (off by default)
+- **Show background pill behind the menu bar icon** (under **General**) — an optional grey background for stronger contrast on busy or wallpaper-tinted menu bars (off by default)
 
 If you've hidden the status icon and want it back, simply re-open WindowPin from your Applications folder — it reappears immediately.
 
