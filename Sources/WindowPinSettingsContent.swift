@@ -73,7 +73,7 @@ struct WindowPinSettingsContent: View {
                     delegate.shortcutModifiers = []
                     delegate.saveShortcutAndUpdateTap()
                 },
-                eventTapToDisable: delegate.currentEventTap
+                eventTapProvider: { delegate.currentEventTap }
             )
         }
 
