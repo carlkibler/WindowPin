@@ -74,8 +74,9 @@ public final class JorvikPermissionWatcher: NSObject, ObservableObject {
     /// Whether the permission is currently granted.
     @Published public private(set) var isGranted: Bool
 
-    /// How often the state is re-read while the watcher is alive. The checks are all cheap
-    /// lookups, and this only runs while a Settings window is open.
+    /// How often the state is re-read while polling. The checks are all cheap lookups.
+    /// Call `pausePolling()` (or use `jorvikPollsWhileVisible`) so this only runs while a
+    /// Settings window is actually on screen.
     public static let pollSeconds: TimeInterval = 1
 
     /// How long to stop reading for after a system announcement, so nothing races the
@@ -112,14 +113,36 @@ public final class JorvikPermissionWatcher: NSObject, ObservableObject {
         NotificationCenter.default.addObserver(
             self, selector: #selector(reactivated),
             name: NSApplication.didBecomeActiveNotification, object: nil)
-        // And the poll covers the case that is actually complained about: both windows
-        // visible at once, where the app never goes inactive and so nothing tells it
-        // anything. Scheduled in the common modes so tracking a menu cannot stall it.
+        startPolling()
+    }
+
+    /// The poll covers the case that is actually complained about: both windows visible at
+    /// once, where the app never goes inactive and so nothing tells it anything. Scheduled
+    /// in the common modes so tracking a menu cannot stall it.
+    private func startPolling() {
+        guard poll == nil else { return }
         let timer = Timer(timeInterval: Self.pollSeconds, repeats: true) { [weak self] _ in
             self?.reread()
         }
         RunLoop.main.add(timer, forMode: .common)
         poll = timer
+    }
+
+    /// Stop the once-a-second poll, for a watcher whose window is not on screen.
+    ///
+    /// A Settings window is cached rather than released when it is closed, so its watchers
+    /// outlive every viewing of it. Without this they went on polling for the rest of the
+    /// app's life. Announcements and returning to the app still trigger a read.
+    public func pausePolling() {
+        poll?.invalidate()
+        poll = nil
+    }
+
+    /// Start polling again after `pausePolling()`, reading straight away because the
+    /// state may have changed while nothing was looking.
+    public func resumePolling() {
+        startPolling()
+        reread()
     }
 
     deinit {
@@ -198,5 +221,59 @@ public final class JorvikPermissionWatcher: NSObject, ObservableObject {
         case inputMonitoring = "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent"
         case camera = "x-apple.systempreferences:com.apple.preference.security?Privacy_Camera"
         case microphone = "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone"
+    }
+}
+
+// MARK: - Polling only while the window is on screen
+
+extension View {
+    /// Polls the given watchers only while this view's window is visible.
+    ///
+    /// `onDisappear` is no use for this: Settings windows are cached and ordered out, not
+    /// torn down, so the view never disappears from SwiftUI's point of view. The window's
+    /// occlusion state does change when it is closed, hidden or covered, so that is what
+    /// is observed.
+    public func jorvikPollsWhileVisible(_ watchers: JorvikPermissionWatcher...) -> some View {
+        background(JorvikWindowVisibilityObserver { visible in
+            for watcher in watchers {
+                if visible { watcher.resumePolling() } else { watcher.pausePolling() }
+            }
+        })
+    }
+}
+
+private struct JorvikWindowVisibilityObserver: NSViewRepresentable {
+    let onChange: (Bool) -> Void
+
+    func makeNSView(context: Context) -> NSView { ObserverView(onChange: onChange) }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class ObserverView: NSView {
+        let onChange: (Bool) -> Void
+        private var token: NSObjectProtocol?
+
+        init(onChange: @escaping (Bool) -> Void) {
+            self.onChange = onChange
+            super.init(frame: .zero)
+        }
+
+        required init?(coder: NSCoder) { fatalError("not used") }
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            if let token { NotificationCenter.default.removeObserver(token) }
+            token = nil
+            guard let window else { onChange(false); return }
+            token = NotificationCenter.default.addObserver(
+                forName: NSWindow.didChangeOcclusionStateNotification, object: window, queue: .main
+            ) { [weak self] _ in self?.report() }
+            report()
+        }
+
+        private func report() {
+            onChange(window?.occlusionState.contains(.visible) ?? false)
+        }
+
+        deinit { if let token { NotificationCenter.default.removeObserver(token) } }
     }
 }

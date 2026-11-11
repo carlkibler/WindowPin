@@ -99,6 +99,9 @@ struct WindowPinSettingsContent: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            // The Settings window is cached, so these watchers would otherwise poll for the
+            // life of the app once Settings had been opened.
+            .jorvikPollsWhileVisible(accessibility, screenRecording)
 
             VStack(alignment: .leading, spacing: 4) {
                 HStack {
