@@ -139,7 +139,14 @@ enum AXScroller {
     /// Scroll a pinned window by a wheel delta, without touching focus.
     /// - Parameter at: the pointer, in global top-left coordinates, matching the
     ///   space Accessibility reports element frames in.
-    static func scroll(pid: pid_t, windowID: CGWindowID, deltaY: CGFloat, at point: CGPoint) {
+    /// - Parameter precise: whether `deltaY` is in points, as from a trackpad,
+    ///   rather than in lines, as from a wheel mouse.
+    static func scroll(pid: pid_t, windowID: CGWindowID, deltaY rawDeltaY: CGFloat,
+                       precise: Bool, at point: CGPoint) {
+        // A wheel reports lines, about one per notch, where a trackpad
+        // reports points, so a wheel crawled at a tenth of the speed. Ten
+        // points is the line AppKit's own scroll views use.
+        let deltaY = precise ? rawDeltaY : rawDeltaY * 10
         guard deltaY != 0 else { return }
         // A trackpad sends scroll events faster than a read and a set can be
         // made, and a cache refresh holds the queue for over 100 ms. With one

@@ -301,7 +301,8 @@ class WindowOverlay: NSPanel {
         if event.type == .scrollWheel, isPinVisible, usesAccessibilityScrolling {
             if let point = targetPoint(forLocation: event.locationInWindow) {
                 AXScroller.scroll(pid: targetPID, windowID: targetWindowID,
-                                  deltaY: event.scrollingDeltaY, at: point)
+                                  deltaY: event.scrollingDeltaY,
+                                  precise: event.hasPreciseScrollingDeltas, at: point)
             }
             return
         }
