@@ -93,6 +93,10 @@ class WindowOverlay: NSPanel {
     private var didLogFirstFrame = false
     /// Total frames delivered by the stream (diagnostics).
     private(set) var framesReceived = 0
+    /// Restarts tried since the stream last delivered a frame. Capped, so a
+    /// stream that cannot start does not retry for as long as the pin is up.
+    private var streamRestarts = 0
+    private static let maxStreamRestarts = 5
 
     /// Whether the overlay is currently in "pinned visible" mode.
     private(set) var isPinVisible = false
@@ -656,6 +660,7 @@ class WindowOverlay: NSPanel {
         }
         wplog("overlay: bringToFront wid=\(targetWindowID)")
         isPinVisible = true
+        streamRestarts = 0
         syncFrameWithTarget()
 
         if !isVisible {
@@ -765,10 +770,28 @@ class WindowOverlay: NSPanel {
             guard let error = error else { return }
             wplog("overlay: startCapture failed wid=\(self?.targetWindowID ?? 0): \(error)")
             DispatchQueue.main.async {
-                if self?.stream === newStream { self?.stream = nil }
+                guard let self, self.stream === newStream else { return }
+                self.stream = nil
+                self.restartStreamAfterFailure()
             }
         }
         wplog("overlay: stream starting wid=\(targetWindowID) maxFPS=\(Self.captureRate)")
+    }
+
+    /// Try the stream again a moment after it failed to start or stopped on
+    /// its own, rather than leaving the pin on a frozen frame until it next
+    /// goes behind and comes back.
+    private func restartStreamAfterFailure() {
+        guard isPinVisible else { return }
+        guard streamRestarts < Self.maxStreamRestarts else {
+            wplog("overlay: giving up restarting stream wid=\(targetWindowID)")
+            return
+        }
+        streamRestarts += 1
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            guard let self = self, self.isPinVisible, self.stream == nil else { return }
+            self.resolveSCWindow(thenStartStream: true)
+        }
     }
 
     private func stopStream() {
@@ -931,6 +954,7 @@ extension WindowOverlay: SCStreamOutput, SCStreamDelegate {
             self.framesReceived += 1
             if !self.didLogFirstFrame {
                 self.didLogFirstFrame = true
+                self.streamRestarts = 0
                 wplog("overlay: first frame \(CVPixelBufferGetWidth(pixelBuffer))x\(CVPixelBufferGetHeight(pixelBuffer))px for \(Int(self.frame.width))x\(Int(self.frame.height))pt @\(self.streamPixelScale)x wid=\(self.targetWindowID)")
                 // Stage B measurement, behind its own flag. See AXScroller.
                 AXScroller.probe(pid: self.targetPID, windowID: self.targetWindowID)
@@ -965,9 +989,7 @@ extension WindowOverlay: SCStreamOutput, SCStreamDelegate {
             if self.stream === stream { self.stream = nil }
             // Window may have closed (tracker will prune it), or capture broke
             // (display reconfigure) — retry while we're still pinned-visible.
-            if self.isPinVisible {
-                self.resolveSCWindow(thenStartStream: true)
-            }
+            self.restartStreamAfterFailure()
         }
     }
 }
