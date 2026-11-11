@@ -16,8 +16,6 @@ struct JorvikSettingsView<AppSettings: View>: View {
     var showsLaunchAtLogin: Bool = true
     @ViewBuilder let appSettings: () -> AppSettings
 
-    @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
-
     var body: some View {
         VStack(spacing: 0) {
             // No heading here. `showWindow` puts the same string in the window
@@ -33,18 +31,7 @@ struct JorvikSettingsView<AppSettings: View>: View {
 
                 if showsLaunchAtLogin {
                     Section("General") {
-                        Toggle("Launch at Login", isOn: $launchAtLogin)
-                            .onChange(of: launchAtLogin) { _, newValue in
-                                do {
-                                    if newValue {
-                                        try SMAppService.mainApp.register()
-                                    } else {
-                                        try SMAppService.mainApp.unregister()
-                                    }
-                                } catch {
-                                    launchAtLogin = SMAppService.mainApp.status == .enabled
-                                }
-                            }
+                        JorvikLaunchAtLoginToggle()
                     }
                 }
 
@@ -71,7 +58,12 @@ struct JorvikSettingsView<AppSettings: View>: View {
         // view's `fittingSize`, so a fixed size there made the measurement a
         // constant and every settings window came out the same small pane with a
         // scroller however much room the display had.
+        //
+        // The ideal width is what the window opens at. Without one the form
+        // asks for the width of its longest line of text unwrapped, and the
+        // window came out half as wide again as a settings window should be.
         .frame(minWidth: JorvikSettingsMetrics.minContentSize.width,
+               idealWidth: JorvikSettingsMetrics.idealContentWidth,
                minHeight: JorvikSettingsMetrics.minContentSize.height)
     }
 
@@ -133,6 +125,27 @@ struct JorvikSettingsView<AppSettings: View>: View {
         // built-in display then cannot reach the bottom of the form — the window is off
         // the screen and there is nothing to drag it back by.
         JorvikSettingsWindowCache.sizer = JorvikSettingsWindowSizer(window: window)
+    }
+}
+
+/// The **Launch at Login** switch on its own, for an app that puts it in a
+/// section with other settings (pass `showsLaunchAtLogin: false` to the shell).
+struct JorvikLaunchAtLoginToggle: View {
+    @State private var launchAtLogin: Bool = SMAppService.mainApp.status == .enabled
+
+    var body: some View {
+        Toggle("Launch at Login", isOn: $launchAtLogin)
+            .onChange(of: launchAtLogin) { _, newValue in
+                do {
+                    if newValue {
+                        try SMAppService.mainApp.register()
+                    } else {
+                        try SMAppService.mainApp.unregister()
+                    }
+                } catch {
+                    launchAtLogin = SMAppService.mainApp.status == .enabled
+                }
+            }
     }
 }
 
@@ -254,6 +267,9 @@ private enum JorvikSettingsMetrics {
     /// The smallest a settings window gets, however little it contains. The view
     /// and the window sizing both read this so they can't drift apart.
     static let minContentSize = NSSize(width: 420, height: 400)
+
+    /// The width a settings window opens at.
+    static let idealContentWidth: CGFloat = 500
 
     /// The most of a display's visible area a settings window may take.
     ///

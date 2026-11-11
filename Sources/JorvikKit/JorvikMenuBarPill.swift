@@ -143,16 +143,26 @@ enum JorvikMenuBarPill {
 
 /// SwiftUI settings section for the menu bar pill. Drop into JorvikSettingsView's appSettings closure.
 struct MenuBarPillSettings: View {
-    @State private var enabled = JorvikMenuBarPill.isEnabled
     var onChanged: (() -> Void)?
 
     var body: some View {
         Section("Menu Bar Icon") {
-            Toggle("Show background pill", isOn: $enabled)
-                .onChange(of: enabled) { _, newValue in
-                    UserDefaults.standard.set(newValue, forKey: "menuBarPillEnabled")
-                    onChanged?()
-                }
+            MenuBarPillToggle(onChanged: onChanged)
         }
+    }
+}
+
+/// The pill switch on its own, for an app that puts it in a section with
+/// other settings.
+struct MenuBarPillToggle: View {
+    @State private var enabled = JorvikMenuBarPill.isEnabled
+    var onChanged: (() -> Void)?
+
+    var body: some View {
+        Toggle("Show background pill behind the menu bar icon", isOn: $enabled)
+            .onChange(of: enabled) { _, newValue in
+                UserDefaults.standard.set(newValue, forKey: "menuBarPillEnabled")
+                onChanged?()
+            }
     }
 }
