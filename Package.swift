@@ -14,6 +14,11 @@ let package = Package(
                 .unsafeFlags(["-framework", "ScreenCaptureKit"]),
                 .unsafeFlags(["-framework", "ServiceManagement"]),
             ]
-        )
+        ),
+        .testTarget(
+            name: "WindowPinTests",
+            dependencies: ["WindowPin"],
+            path: "Tests/WindowPinTests"
+        ),
     ]
 )
