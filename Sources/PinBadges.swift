@@ -27,23 +27,54 @@ final class PinBadgeController {
     private var focusedWindow: ForeignWindow?
     private var timer: Timer?
     private var tick = 0
+    /// Ticks left to run at the full rate after something changed. See `update`.
+    private var fastTicks = 0
+    private var activationObserver: NSObjectProtocol?
 
     init(tracker: PinnedWindowTracker, toggle: @escaping (ForeignWindow) -> Void) {
         self.tracker = tracker
         self.toggle = toggle
-        // Ten times a second keeps a badge on a window being dragged; reading one
-        // window's frame is cheap. Common modes, so it keeps up during a drag.
+        // Common modes, so it keeps up during a drag.
         let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in self?.update() }
+        // Nothing here is to the tenth of a second, so let the system line the
+        // wake-ups up with others.
+        t.tolerance = 0.03
         RunLoop.main.add(t, forMode: .common)
         timer = t
+        // Switching apps raises windows and brings pins up or sends them
+        // behind, all of which a badge has to follow at once.
+        activationObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.refresh() }
     }
 
-    deinit { timer?.invalidate() }
+    deinit {
+        timer?.invalidate()
+        if let activationObserver { NSWorkspace.shared.notificationCenter.removeObserver(activationObserver) }
+    }
 
     // MARK: - Update
 
+    /// Bring the badges up to date now, and keep them close for the next
+    /// second. Called when a window is pinned or unpinned and when the active
+    /// app changes; a pin coming up for the first time takes a moment to
+    /// appear, and its badge has to land on it when it does.
+    func refresh() {
+        fastTicks = 10
+        updatePinnedBadges()
+        updateFocusedBadge()
+    }
+
+    /// Ten times a second keeps a badge on a window being dragged, but a
+    /// window is only dragged with a mouse button down. The rest of the time
+    /// the badges are checked three times a second, which is as often as the
+    /// focused window was being read anyway. This runs for as long as
+    /// WindowPin does, so two ticks in three now cost next to nothing.
     private func update() {
         tick += 1
+        let fast = fastTicks > 0 || NSEvent.pressedMouseButtons != 0
+        if fastTicks > 0 { fastTicks -= 1 }
+        guard fast || tick % 3 == 0 else { return }
         updatePinnedBadges()
         // Asking the front app for its focused window is an Accessibility call,
         // so do it a few times a second rather than every tick.
@@ -71,7 +102,14 @@ final class PinBadgeController {
             // While the floating pin is showing it is what you see, and it may be
             // cropped or moved away from the real window, so the badge goes on it.
             if let overlay = tracker.overlay(for: pw.windowID), overlay.isPinVisible, overlay.isVisible {
-                badge.show(cornerOf: overlay.frame, level: overlay.level, above: overlay.windowNumber)
+                // A pin cropped down to a sliver would be mostly badge, and the
+                // badge would take the clicks meant to move it or clear its
+                // crop. Such a pin is unpinned from the menu instead.
+                if overlay.frame.width >= BadgePanel.side * 3, overlay.frame.height >= BadgePanel.side * 2 {
+                    badge.show(cornerOf: overlay.frame, level: overlay.level, above: overlay.windowNumber)
+                } else {
+                    badge.orderOut(nil)
+                }
             } else if let frame = Self.onScreenFrame(of: pw.windowID) {
                 badge.show(cornerOf: frame, level: .normal, above: Int(pw.windowID))
             } else {
@@ -83,7 +121,11 @@ final class PinBadgeController {
     private func updateFocusedBadge() {
         guard let fw = focusedWindow, !tracker.isPinned(windowID: fw.windowID),
               let frame = Self.onScreenFrame(of: fw.windowID),
-              frame.width >= 200, frame.height >= 120 else {
+              frame.width >= 200, frame.height >= 120,
+              // A window filling a whole display is full screen: a film, a
+              // presentation, a game. There is no title bar for the badge to
+              // sit in there, only the corner of the content.
+              !NSScreen.screens.contains(where: { $0.frame == frame }) else {
             focusedBadge.orderOut(nil)
             return
         }
@@ -107,9 +149,8 @@ final class PinBadgeController {
         AXUIElementSetMessagingTimeout(axApp, 0.1)
         var ref: AnyObject?
         guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &ref) == .success,
-              let window = ref, CFGetTypeID(window) == AXUIElementGetTypeID() else { return nil }
-        var wid: CGWindowID = 0
-        guard _AXUIElementGetWindow(window as! AXUIElement, &wid) == .success, wid != 0 else { return nil }
+              let window = WindowLevelManager.element(from: ref),
+              let wid = WindowLevelManager.windowID(of: window) else { return nil }
         return ForeignWindow(windowID: wid, ownerPID: app.processIdentifier,
                              ownerName: app.localizedName ?? "", windowTitle: "")
     }

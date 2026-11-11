@@ -10,6 +10,9 @@ enum PinFeedbackHUD {
 
     private static var panel: NSPanel?
     private static var hideWork: DispatchWorkItem?
+    /// Counts the badges shown, so a fade that is still finishing can tell it
+    /// has been overtaken.
+    private static var shown = 0
 
     static func show(_ text: String, windowID: CGWindowID) {
         let label = NSTextField(labelWithString: text)
@@ -26,15 +29,26 @@ enum PinFeedbackHUD {
         box.addSubview(label)
 
         p.setFrame(NSRect(origin: origin(for: size, over: windowID), size: size), display: true)
-        p.alphaValue = 1
+        // Through the animator, so a fade still running is replaced.
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0
+            p.animator().alphaValue = 1
+        }
         p.orderFrontRegardless()
 
         hideWork?.cancel()
+        shown += 1
+        let this = shown
         let work = DispatchWorkItem {
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.3
                 p.animator().alphaValue = 0
-            }, completionHandler: { p.orderOut(nil) })
+            }, completionHandler: {
+                // Cancelling the work item does not stop a fade already under
+                // way. Pinning and unpinning about a second apart put the new
+                // badge up just in time for the old fade to take it down.
+                if this == shown { p.orderOut(nil) }
+            })
         }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)

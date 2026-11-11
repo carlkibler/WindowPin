@@ -7,56 +7,6 @@ import ServiceManagement
 import Sparkle
 #endif
 
-// MARK: - Global CGEvent tap callback (must be a C-compatible function)
-
-private var _hotkeyAction: (() -> Void)?
-private var _eventTap: CFMachPort?
-private var _shortcutKeyCode: Int64 = 35
-private var _shortcutCGModifiers: CGEventFlags = [.maskCommand, .maskControl]
-
-private func hotkeyTapCallback(
-    proxy: CGEventTapProxy,
-    type: CGEventType,
-    event: CGEvent,
-    refcon: UnsafeMutableRawPointer?
-) -> Unmanaged<CGEvent>? {
-    if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-        if let tap = _eventTap {
-            CGEvent.tapEnable(tap: tap, enable: true)
-        }
-        return Unmanaged.passUnretained(event)
-    }
-
-    guard type == .keyDown else {
-        return Unmanaged.passUnretained(event)
-    }
-
-    let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-    let flags = event.flags
-
-    let relevant: CGEventFlags = [.maskCommand, .maskControl, .maskShift, .maskAlternate]
-
-    // Nothing bound, nothing to match. A cleared shortcut is stored as key code
-    // 0 with no modifiers, and **key code 0 is the letter A**, so without this
-    // a bare A would satisfy both halves of the test below (0 == 0, and an
-    // empty flag set equals an empty flag set). It would toggle the pin and be
-    // swallowed, because that branch returns nil.
-    guard _shortcutKeyCode != 0 || !_shortcutCGModifiers.intersection(relevant).isEmpty else {
-        return Unmanaged.passUnretained(event)
-    }
-
-    if keyCode == _shortcutKeyCode {
-        if flags.intersection(relevant) == _shortcutCGModifiers.intersection(relevant) {
-            DispatchQueue.main.async {
-                _hotkeyAction?()
-            }
-            return nil
-        }
-    }
-
-    return Unmanaged.passUnretained(event)
-}
-
 // MARK: - App Delegate
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -82,8 +32,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var shortcutKeyCode: UInt16 = 35
     var shortcutModifiers: NSEvent.ModifierFlags = [.command, .control]
 
-    /// Expose the CGEvent tap for JorvikShortcutRecorder to temporarily disable during recording
-    var currentEventTap: CFMachPort? { _eventTap }
+    /// The shortcut recorder calls this while it is listening, so pressing the
+    /// shortcut that is already set records it instead of toggling a pin.
+    func setHotkeySuspended(_ suspended: Bool) {
+        HotkeyTap.shared.isSuspended = suspended
+    }
 
     private var permissionTimer: Timer?
 
@@ -137,6 +90,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         tracker.onChange = { [weak self] in
             self?.updateIcon()
+            self?.badges?.refresh()
+        }
+        tracker.onCaptureDenied = { pw in
+            PinFeedbackHUD.show("Unpinned: allow Screen Recording", windowID: CGWindowID(pw.windowID))
         }
         badges = PinBadgeController(tracker: tracker) { [weak self] fw in
             guard let self else { return }
@@ -189,9 +146,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         permissionTimer?.invalidate()
-        if let tap = _eventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-        }
+        HotkeyTap.shared.uninstall()
         if let obs = focusObserver { NSWorkspace.shared.notificationCenter.removeObserver(obs) }
         tracker.unpinAll()
     }
@@ -254,7 +209,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The remembered window is only a fallback, and it may have been closed
         // since it was remembered; offering it would pin a window that is gone.
         var remembered = lastForeignWindow
-        if let fw = remembered, !WindowDetector.allOnScreenWindowIDs().contains(fw.windowID) {
+        if let fw = remembered, !WindowDetector.allWindowIDs().contains(fw.windowID) {
             lastForeignWindow = nil
             remembered = nil
         }
@@ -325,6 +280,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func unpinMenuItem(_ sender: NSMenuItem) {
         guard let windowID = sender.representedObject as? UInt32 else { return }
         tracker.unpin(windowID: windowID)
+        PinFeedbackHUD.show("Unpinned", windowID: CGWindowID(windowID))
     }
 
     @objc private func unpinAllAction() {
@@ -364,16 +320,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: - Global hotkey (CGEvent tap)
 
     private func registerHotkey() {
-        _hotkeyAction = { [weak self] in
+        HotkeyTap.shared.action = { [weak self] in
             self?.togglePinFrontmostWindow()
         }
-        _shortcutKeyCode = Int64(shortcutKeyCode)
-        _shortcutCGModifiers = nsToCGModifiers(shortcutModifiers)
+        HotkeyTap.shared.binding = currentBinding
 
         if !tryCreateEventTap() {
             wplog("registerHotkey: waiting for Accessibility permission…")
             startPermissionPolling()
         }
+    }
+
+    private var currentBinding: HotkeyBinding {
+        HotkeyBinding(keyCode: Int64(shortcutKeyCode), modifiers: nsToCGModifiers(shortcutModifiers))
     }
 
     private func startPermissionPolling() {
@@ -390,54 +349,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// Revoking Accessibility (or removing and re-adding the app, as the README
-    /// suggests) leaves our tap invalid, and nothing else notices: the hotkey
+    /// suggests) leaves our tap dead, and nothing else notices: the hotkey
     /// stays dead until relaunch. Called whenever the frontmost app changes,
     /// which covers coming back from System Settings. A dead tap is dropped so
     /// the permission poll can build a fresh one once Accessibility is granted
     /// again.
     private func recoverEventTapIfNeeded() {
-        // A tap that is only disabled is left alone: the tap callback already
-        // re-enables one the system switched off, and the shortcut recorder
-        // switches it off on purpose while it records.
-        guard let tap = _eventTap, permissionTimer == nil, !CFMachPortIsValid(tap) else { return }
+        let tap = HotkeyTap.shared
+        guard tap.isInstalled, permissionTimer == nil, !tap.isHealthy else { return }
         wplog("recoverEventTap: tap is no longer usable, waiting for Accessibility permission…")
-        _eventTap = nil
+        tap.uninstall()
         startPermissionPolling()
     }
 
     private func tryCreateEventTap() -> Bool {
-        if _eventTap != nil { return true }
-
-        let mask: CGEventMask = (1 << CGEventType.keyDown.rawValue)
-        // Tap location & position chosen to play nicely with keystroke
-        // rewriters like HyperKey and Karabiner-Elements that synthesise
-        // "Hyper" (shift+ctrl+opt+cmd) from a single physical key. At
-        // .cgSessionEventTap with .headInsertEventTap we'd see the raw
-        // event (e.g. Caps Lock + key) before the rewriter transforms
-        // it, never matching the user's Hyper-bound shortcut.
-        // .cgAnnotatedSessionEventTap is the latest tap layer — after
-        // HID-level and session-level rewriters — and .tailAppendEventTap
-        // runs us last in our level's chain. Real-modifier bindings
-        // (cmd+opt+arrows etc.) keep working because they don't need a
-        // rewriter; only Hyper-derived shortcuts ever depended on the
-        // rewriter running first.
-        guard let tap = CGEvent.tapCreate(
-            tap: .cgAnnotatedSessionEventTap,
-            place: .tailAppendEventTap,
-            options: .defaultTap,
-            eventsOfInterest: mask,
-            callback: hotkeyTapCallback,
-            userInfo: nil
-        ) else {
+        if HotkeyTap.shared.isInstalled { return true }
+        guard HotkeyTap.shared.install() else {
             wplog("tryCreateEventTap: CGEvent.tapCreate failed (trusted=\(AXIsProcessTrusted()))")
             return false
         }
-
-        _eventTap = tap
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: true)
-
         wplog("tryCreateEventTap: SUCCESS — hotkey active for keyCode=\(shortcutKeyCode)")
         return true
     }
@@ -473,10 +403,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let defaults = UserDefaults.standard
         guard defaults.object(forKey: "shortcutKeyCode") != nil,
               defaults.object(forKey: "shortcutModifiers") != nil else { return }
-        let kc = defaults.integer(forKey: "shortcutKeyCode")
-        let mod = defaults.integer(forKey: "shortcutModifiers")
-        shortcutKeyCode = UInt16(kc)
-        shortcutModifiers = NSEvent.ModifierFlags(rawValue: UInt(mod))
+        // Converted with care: a value that does not fit would trap here, at
+        // launch, on every launch. One that is out of range is not a key or a
+        // modifier set at all, so the default stands.
+        guard let kc = UInt16(exactly: defaults.integer(forKey: "shortcutKeyCode")),
+              let mod = UInt(exactly: defaults.integer(forKey: "shortcutModifiers")) else { return }
+        shortcutKeyCode = kc
+        shortcutModifiers = NSEvent.ModifierFlags(rawValue: mod)
+            .intersection([.command, .control, .option, .shift])
     }
 
     func saveShortcutAndUpdateTap() {
@@ -486,8 +420,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func saveShortcut() {
         UserDefaults.standard.set(Int(shortcutKeyCode), forKey: "shortcutKeyCode")
         UserDefaults.standard.set(Int(shortcutModifiers.rawValue), forKey: "shortcutModifiers")
-        _shortcutKeyCode = Int64(shortcutKeyCode)
-        _shortcutCGModifiers = nsToCGModifiers(shortcutModifiers)
+        HotkeyTap.shared.binding = currentBinding
         republishHotkey()
     }
 

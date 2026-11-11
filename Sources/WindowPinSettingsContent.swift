@@ -9,7 +9,10 @@ struct WindowPinSettingsContent: View {
     // sync with the store — a computed Binding here goes stale after the first
     // change and silently swallows every second interaction.
     @AppStorage("captureRate") private var captureRate: Double = 30.0
-    @AppStorage("forwardEvents") private var forwardEvents: Bool = true
+    // The default is the overlay's own, which is off on macOS 27 and later. A
+    // literal `true` here drew the switch as on while nothing was stored and
+    // the overlay was treating it as off.
+    @AppStorage("forwardEvents") private var forwardEvents: Bool = WindowOverlay.forwardEvents
     @AppStorage("pinToAllSpaces") private var pinToAllSpaces: Bool = false
     @AppStorage(PinBadgeController.pinnedKey) private var badgePinned: Bool = true
     @AppStorage(PinBadgeController.focusedKey) private var badgeFocused: Bool = true
@@ -19,6 +22,16 @@ struct WindowPinSettingsContent: View {
     /// either permission left the row still asking for it.
     @StateObject private var accessibility = JorvikPermissionWatcher.accessibility()
     @StateObject private var screenRecording = JorvikPermissionWatcher.screenRecording()
+
+    /// What the switch above does, which is less on macOS 27: a click can no
+    /// longer be sent into another app's window there (see
+    /// `WindowOverlay.forwardEvents`), so only scrolling is passed on.
+    private static var interactionCaption: String {
+        if #available(macOS 27, *) {
+            return "Scrolling on an overlay scrolls the pinned window. A click always switches to the real window."
+        }
+        return "Clicks and scrolls on an overlay are sent to the pinned window. \u{2318}-click an overlay to switch to the real window. When off, any click switches to the real window."
+    }
 
     var body: some View {
         Section("Overlays") {
@@ -43,7 +56,7 @@ struct WindowPinSettingsContent: View {
 
             VStack(alignment: .leading, spacing: 4) {
                 Toggle("Interact through overlays", isOn: $forwardEvents)
-                Text("Clicks and scrolls on an overlay are sent to the pinned window. \u{2318}-click an overlay to switch to the real window. When off, any click switches to the real window.")
+                Text(Self.interactionCaption)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -83,7 +96,7 @@ struct WindowPinSettingsContent: View {
                     delegate.shortcutModifiers = []
                     delegate.saveShortcutAndUpdateTap()
                 },
-                eventTapProvider: { delegate.currentEventTap }
+                onRecordingChanged: { delegate.setHotkeySuspended($0) }
             )
         }
 
