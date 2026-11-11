@@ -141,21 +141,37 @@ enum AXScroller {
     ///   space Accessibility reports element frames in.
     static func scroll(pid: pid_t, windowID: CGWindowID, deltaY: CGFloat, at point: CGPoint) {
         guard deltaY != 0 else { return }
+        // A trackpad sends scroll events faster than a read and a set can be
+        // made, and a cache refresh holds the queue for over 100 ms. With one
+        // round trip per event the queue fell behind, and the window went on
+        // scrolling after the fingers had lifted. Deltas that arrive while
+        // the queue is busy are added up and applied together, once.
         queue.async {
-            guard let bar = barUnder(point, pid: pid, windowID: windowID) else { return }
-            guard let current = copyDouble(bar, kAXValueAttribute) else {
-                cache[windowID] = nil
-                return
-            }
-            // Scrolling content down means moving the scroll position up.
-            let target = min(1.0, max(0.0, current - Double(deltaY) * sensitivity))
-            guard abs(target - current) > 0.000_01 else { return }
-            let err = AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString,
-                                                  target as CFNumber)
-            if err != .success {
-                wplog("axscroll: set failed err=\(err.rawValue), dropping the cached bar")
-                cache[windowID] = nil
-            }
+            let queued = pending[windowID]
+            pending[windowID] = Pending(pid: pid, deltaY: (queued?.deltaY ?? 0) + deltaY, point: point)
+            if queued == nil { queue.async { drain(windowID: windowID) } }
+        }
+    }
+
+    /// Scrolling not yet applied, per window. Touched only on `queue`.
+    private struct Pending { let pid: pid_t; let deltaY: CGFloat; let point: CGPoint }
+    private static var pending: [CGWindowID: Pending] = [:]
+
+    private static func drain(windowID: CGWindowID) {
+        guard let next = pending.removeValue(forKey: windowID),
+              let bar = barUnder(next.point, pid: next.pid, windowID: windowID) else { return }
+        guard let current = copyDouble(bar, kAXValueAttribute) else {
+            cache[windowID] = nil
+            return
+        }
+        // Scrolling content down means moving the scroll position up.
+        let target = min(1.0, max(0.0, current - Double(next.deltaY) * sensitivity))
+        guard abs(target - current) > 0.000_01 else { return }
+        let err = AXUIElementSetAttributeValue(bar, kAXValueAttribute as CFString,
+                                              target as CFNumber)
+        if err != .success {
+            wplog("axscroll: set failed err=\(err.rawValue), dropping the cached bar")
+            cache[windowID] = nil
         }
     }
 
@@ -228,7 +244,9 @@ enum AXScroller {
     }
 
     /// Forget a window's cached element when it is unpinned.
-    static func forget(windowID: CGWindowID) { queue.async { cache[windowID] = nil } }
+    static func forget(windowID: CGWindowID) {
+        queue.async { cache[windowID] = nil; pending[windowID] = nil }
+    }
 
     // MARK: - Tree walking
 
