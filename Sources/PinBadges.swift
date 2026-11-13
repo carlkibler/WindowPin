@@ -280,8 +280,10 @@ final class PinBadgeController {
         AXUIElementSetMessagingTimeout(axApp, 0.1)
         var ref: AnyObject?
         guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &ref) == .success,
-              let window = WindowLevelManager.element(from: ref),
-              let wid = WindowLevelManager.windowID(of: window) else { return nil }
+              let window = WindowLevelManager.element(from: ref) else { return nil }
+        let wid = WindowLevelManager.windowID(of: window)
+        WindowSurvey.record(window, windowID: wid, app: app)
+        guard let wid else { return nil }
         return ForeignWindow(windowID: wid, ownerPID: app.processIdentifier,
                              ownerName: app.localizedName ?? "", windowTitle: "")
     }
