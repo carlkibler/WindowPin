@@ -19,15 +19,16 @@ import Foundation
 // `createFile`, which TRUNCATED the log on every launch and wrote for every
 // user whether they wanted it or not. /tmp is shared and world-readable, and
 // this log records PINNED WINDOW TITLES.
-private let wpLogPath: String = {
+let wpLogDirectory: URL = {
     let logs = FileManager.default
         .urls(for: .libraryDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("Logs", isDirectory: true)
         .appendingPathComponent("WindowPin", isDirectory: true)
     try? FileManager.default.createDirectory(at: logs, withIntermediateDirectories: true,
                                              attributes: [.posixPermissions: 0o700])
-    return logs.appendingPathComponent("windowpin.log").path
+    return logs
 }()
+private let wpLogPath = wpLogDirectory.appendingPathComponent("windowpin.log").path
 private let wpLogQueue = DispatchQueue(label: "cc.jorviksoftware.WindowPin.log")
 private let wpLogFmt: DateFormatter = {
     let f = DateFormatter()
@@ -40,11 +41,15 @@ private let wpLogFmt: DateFormatter = {
 /// event, which arrives continuously while the user is scrolling.
 func wplog(_ msg: @autoclosure () -> String) {
     guard UserDefaults.standard.bool(forKey: "debugLogging") else { return }
-    let line = "\(wpLogFmt.string(from: Date()))  \(msg())\n"
+    wpAppend("\(wpLogFmt.string(from: Date()))  \(msg())\n", to: wpLogPath)
+}
+
+/// Append a line to a file in the log directory, off the main thread.
+func wpAppend(_ line: String, to path: String) {
     wpLogQueue.async {
         guard let data = line.data(using: .utf8) else { return }
         // O_NOFOLLOW + 0700 parent dir closes the symlink-attack vector.
-        let fd = open(wpLogPath, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW, 0o600)
+        let fd = open(path, O_WRONLY | O_APPEND | O_CREAT | O_NOFOLLOW, 0o600)
         guard fd >= 0 else { return }
         defer { close(fd) }
         data.withUnsafeBytes { _ = write(fd, $0.baseAddress, $0.count) }

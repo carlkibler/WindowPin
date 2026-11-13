@@ -25,6 +25,8 @@ final class PinBadgeController {
     private var pinnedBadges: [UInt32: BadgePanel] = [:]
     private let focusedBadge = BadgePanel(pinned: false)
     private var focusedWindow: ForeignWindow?
+    /// Keeps badges off the window's own title-bar buttons.
+    private let slots = TitleBarSlotFinder()
 
     // Nothing here runs on a timer while nothing is happening. A badge only
     // has to move when a window does, and every way a window can change says
@@ -201,6 +203,8 @@ final class PinBadgeController {
             badge.orderOut(nil)
             pinnedBadges[id] = nil
         }
+        // Only what is pinned or focused needs its spot remembered.
+        slots.retain(ids.union(focusedWindow.map { [$0.windowID] } ?? []))
         for pw in pinned {
             let badge = pinnedBadges[pw.windowID] ?? {
                 let b = BadgePanel(pinned: true)
@@ -218,12 +222,14 @@ final class PinBadgeController {
                 // badge would take the clicks meant to move it or clear its
                 // crop. Such a pin is unpinned from the menu instead.
                 if overlay.frame.width >= BadgePanel.side * 3, overlay.frame.height >= BadgePanel.side * 2 {
-                    badge.show(cornerOf: overlay.frame, level: overlay.level, above: overlay.windowNumber)
+                    badge.show(on: overlay.frame, at: overlaySpot(pw.windowID, overlay),
+                               level: overlay.level, above: overlay.windowNumber)
                 } else {
                     badge.orderOut(nil)
                 }
             } else if let frame = Self.onScreenFrame(of: pw.windowID) {
-                badge.show(cornerOf: frame, level: .normal, above: Int(pw.windowID))
+                let spot = slots.spot(pid: pw.ownerPID, windowID: pw.windowID, frame: frame, side: BadgePanel.side)
+                badge.show(on: frame, at: spot, level: .normal, above: Int(pw.windowID))
             } else {
                 badge.orderOut(nil)
             }
@@ -246,7 +252,20 @@ final class PinBadgeController {
             let full = WindowDetector.getFrontmostForeignWindow()
             self?.toggle(full?.windowID == fw.windowID ? full! : fw)
         }
-        focusedBadge.show(cornerOf: frame, level: .normal, above: Int(fw.windowID))
+        let spot = slots.spot(pid: fw.ownerPID, windowID: fw.windowID, frame: frame, side: BadgePanel.side)
+        focusedBadge.show(on: frame, at: spot, level: .normal, above: Int(fw.windowID))
+    }
+
+    /// The floating pin shows the window scaled to its own size, so a spot
+    /// found on the window scales with it. A cropped pin shows only part of the
+    /// window and its corner is somewhere else entirely, so it keeps the corner.
+    private func overlaySpot(_ windowID: UInt32, _ overlay: WindowOverlay) -> BadgeSpot {
+        guard overlay.crop == nil, let known = slots.knownSpot(windowID: windowID),
+              known.size.width > 0 else { return .corner }
+        var spot = known.spot.scaled(by: overlay.frame.width / known.size.width)
+        spot.right = min(max(spot.right, TitleBarSlot.margin), overlay.frame.width - BadgePanel.side * 2)
+        spot.top = max(spot.top, 0)
+        return spot
     }
 
     // MARK: - Windows
@@ -261,8 +280,10 @@ final class PinBadgeController {
         AXUIElementSetMessagingTimeout(axApp, 0.1)
         var ref: AnyObject?
         guard AXUIElementCopyAttributeValue(axApp, kAXFocusedWindowAttribute as CFString, &ref) == .success,
-              let window = WindowLevelManager.element(from: ref),
-              let wid = WindowLevelManager.windowID(of: window) else { return nil }
+              let window = WindowLevelManager.element(from: ref) else { return nil }
+        let wid = WindowLevelManager.windowID(of: window)
+        WindowSurvey.record(window, windowID: wid, app: app)
+        guard let wid else { return nil }
         return ForeignWindow(windowID: wid, ownerPID: app.processIdentifier,
                              ownerName: app.localizedName ?? "", windowTitle: "")
     }
@@ -312,9 +333,10 @@ private final class BadgePanel: NSPanel {
     override var canBecomeKey: Bool { false }
     override var canBecomeMain: Bool { false }
 
-    /// Put the badge in the top-right corner of `frame`, just above window `above`.
-    func show(cornerOf frame: NSRect, level: NSWindow.Level, above windowNumber: Int) {
-        let origin = NSPoint(x: frame.maxX - Self.side - 8, y: frame.maxY - Self.side - 4)
+    /// Put the badge at `spot` on `frame`, just above window `above`.
+    func show(on frame: NSRect, at spot: BadgeSpot, level: NSWindow.Level, above windowNumber: Int) {
+        let origin = NSPoint(x: frame.maxX - Self.side - spot.right,
+                             y: frame.maxY - Self.side - spot.top)
         if self.frame.origin != origin { setFrameOrigin(origin) }
         if self.level != level { self.level = level }
         order(.above, relativeTo: windowNumber)
